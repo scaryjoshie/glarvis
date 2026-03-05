@@ -1,8 +1,8 @@
-"""Orchestrator — wires GlarvisTools into the Pipecat pipeline.
+"""Orchestrator — wires Tools into the Pipecat pipeline.
 
 Responsibilities:
 1. Registers tools with the LLM service (schema for LLM, handler for system)
-2. Injects Board snapshot into LLM context before each turn
+2. Injects task state into LLM context before each turn
 3. Delivers notifications via TTS when tasks complete
 """
 
@@ -16,8 +16,8 @@ from pipecat.frames.frames import TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams, FunctionCallResultProperties
 
-from glarvis.board import Board, Notification
-from glarvis.tool import GlarvisTool, TaskResult
+from glarvis.task_manager import TaskManager, Notification
+from glarvis.tool import Tool, TaskResult
 
 if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
@@ -25,45 +25,45 @@ if TYPE_CHECKING:
 
 
 class Orchestrator:
-    """Connects GlarvisTools, the Board, and the Pipecat pipeline.
+    """Connects Tools, the TaskManager, and the Pipecat pipeline.
 
     Usage::
 
-        board = Board()
-        orchestrator = Orchestrator(board, llm, context, task)
+        task_manager = TaskManager()
+        orchestrator = Orchestrator(task_manager, llm, context, task)
 
         # Register tools
         orchestrator.register(SearchFiles())
         orchestrator.register(CheckCalendar())
 
-        # Tools are now available to the LLM, results route through the Board
+        # Tools are now available to the LLM, results route through the TaskManager
     """
 
     def __init__(
         self,
-        board: Board,
+        task_manager: TaskManager,
         llm: LLMService,
         context: LLMContext,
         pipeline_task: PipelineTask,
     ):
-        self.board = board
+        self.task_manager = task_manager
         self.llm = llm
         self.context = context
         self.pipeline_task = pipeline_task
-        self._tools: dict[str, GlarvisTool] = {}
+        self._tools: dict[str, Tool] = {}
 
         # Wire up notification delivery
-        self.board.on_notification = self._on_notification
+        self.task_manager.on_notification = self._on_notification
 
-        # Inject board state before each LLM turn by patching context
+        # Inject task state before each LLM turn by patching context
         self._original_system_message = context.messages[0]["content"] if context.messages else ""
 
-    def register(self, tool: GlarvisTool):
-        """Register a tool with both the Board system and the LLM."""
+    def register(self, tool: Tool):
+        """Register a tool with both the TaskManager and the LLM."""
         self._tools[tool.name] = tool
 
         # Register the Pipecat function schema so the LLM knows about it
-        # We use register_function with a handler that routes through the Board
+        # We use register_function with a handler that routes through the TaskManager
         async def _handler(params: FunctionCallParams):
             result = await self._execute_tool(tool, params)
             # Always pass results back to the LLM context so it remembers them.
@@ -80,14 +80,14 @@ class Orchestrator:
 
         logger.info(f"[Orchestrator] Registered tool: {tool.name}")
 
-    async def _execute_tool(self, tool: GlarvisTool, params: FunctionCallParams) -> TaskResult:
-        """Execute a tool, routing through the Board for lifecycle management."""
+    async def _execute_tool(self, tool: Tool, params: FunctionCallParams) -> TaskResult:
+        """Execute a tool, routing through the TaskManager for lifecycle management."""
         kwargs = dict(params.arguments)
 
         if tool.ttl or tool.notification != "silent":
-            # Async/background tool — spawn on the Board
-            task_id = await self.board.spawn(tool, kwargs)
-            # Return a placeholder; the Board handles completion
+            # Async/background tool — spawn on the TaskManager
+            task_id = await self.task_manager.spawn(tool, kwargs)
+            # Return a placeholder; the TaskManager handles completion
             return TaskResult(
                 value=f"Task {task_id} started",
                 display_text=f"{tool.name} is running",
@@ -111,13 +111,13 @@ class Orchestrator:
         # Use queue_frame on the pipeline task to inject into the pipeline
         self.pipeline_task.queue_frame(frame)
 
-    def inject_board_context(self):
-        """Update the system message with current Board state.
+    def inject_task_context(self):
+        """Update the system message with current task state.
 
         Call this before each LLM turn to give the agent awareness of
         active/completed tasks. Modifies the first system message in-place.
         """
-        snapshot = self.board.snapshot()
+        snapshot = self.task_manager.snapshot()
         if snapshot:
             updated = f"{self._original_system_message}\n\n{snapshot}"
         else:

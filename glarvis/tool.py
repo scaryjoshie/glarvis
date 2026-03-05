@@ -1,6 +1,6 @@
-"""Base tool class for Glarvis. Tools are self-describing: they declare both
-their LLM-facing schema (name, description, parameters) and their system-facing
-behavior (notification level, display routing, hooks)."""
+"""Base tool class. Tools are self-describing: they declare both their LLM-facing
+schema (name, description, parameters) and their system-facing behavior
+(notification level, display routing, hooks)."""
 
 from __future__ import annotations
 
@@ -23,8 +23,8 @@ class TaskResult:
     speak_text: str | None = None  # what to say (only used if display includes "speak")
 
 
-class GlarvisTool:
-    """Base class for all Glarvis tools.
+class Tool:
+    """Base class for all tools.
 
     Subclass this to create a tool. The LLM sees `name`, `description`, and
     `parameters`. The system uses `notification`, `display`, `ttl`, and hooks
@@ -32,7 +32,7 @@ class GlarvisTool:
 
     Example::
 
-        class SearchFiles(GlarvisTool):
+        class SearchFiles(Tool):
             name = "search_files"
             description = "Search the codebase. Results display on the board."
             parameters = {

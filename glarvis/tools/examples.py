@@ -1,12 +1,12 @@
-"""Example tools to demonstrate the GlarvisTool pattern."""
+"""Example tools to demonstrate the Tool pattern."""
 
 import asyncio
 import os
 
-from glarvis.tool import GlarvisTool, TaskResult
+from glarvis.tool import Tool, TaskResult
 
 
-class GetTime(GlarvisTool):
+class GetTime(Tool):
     """Simple synchronous tool — returns immediately, agent speaks the answer."""
 
     name = "get_time"
@@ -24,7 +24,7 @@ class GetTime(GlarvisTool):
         return TaskResult(value=now)
 
 
-class SearchFiles(GlarvisTool):
+class SearchFiles(Tool):
     """Background tool — runs async, posts results to the board."""
 
     name = "search_files"
@@ -57,7 +57,7 @@ class SearchFiles(GlarvisTool):
         return f"search_files (searching, {elapsed:.1f}s)"
 
 
-class ListDirectory(GlarvisTool):
+class ListDirectory(Tool):
     """Quick tool — lists files in a directory, displays on board."""
 
     name = "list_directory"

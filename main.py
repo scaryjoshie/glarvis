@@ -17,12 +17,13 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.services.cartesia.tts import CartesiaTTSService
+from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
+from pipecat.services.anthropic.llm import AnthropicLLMService
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 
-from glarvis.board import Board
+from glarvis.task_manager import TaskManager
 from glarvis.context_injector import BoardContextInjector
 from glarvis.gate import SpeechGate
 from glarvis.orchestrator import Orchestrator
@@ -34,17 +35,20 @@ logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
 SYSTEM_PROMPT = """\
-You are Glarvis, a terse voice assistant. Think efficient coworker, not chatbot.
+You are Glarvis, a deeply intelligent desktop voice assistant. Think efficient coworker, not chatbot.
 
 Rules:
+- Talk in the first person to sound natural. Be friendly, but concise. 
 - Answer questions directly but briefly. If asked "can you hear me", say "yep!" not "got it".
-- For actions and commands, keep it short: "on it", "done", "sure".
-- Don't explain what you did or summarize actions unprompted.
+- For actions and commands, keep it short: "on it", "ok, done", "sure, let me do that".
+- Try not to explain what you did or summarize your actions, unless the user asks for it.
 - But if the user asks for details, give the details they ask for. User requests override these rules.
 - No markdown, bullets, or special characters. This is spoken aloud.
-- Tool calls can have no speech. Silence is fine.
-- Board results speak for themselves. Don't read them out.
-- Ignore speech not directed at you. Empty response, no tool calls."""
+"""
+# - It is ok for tool calls to have no speech, if no speech is necessary. Silence is fine.
+# - Board results speak for themselves. Don't read them out, unleess the user specifies otherwise.
+# - Ignore speech not directed at you. Empty response, no tool calls.
+# """
 
 
 async def main():
@@ -60,6 +64,12 @@ async def main():
     tts = CartesiaTTSService(
         api_key=os.getenv("CARTESIA_API_KEY"),
         voice_id=os.getenv("CARTESIA_VOICE_ID", "87748186-23bb-4158-a1eb-332911b0b708"),
+        params=CartesiaTTSService.InputParams(
+            generation_config=GenerationConfig(
+                # emotion="confident",
+                speed=1.25,
+            )
+        ),
     )
     # 694f9389-aac1-45b6-b726-9d9369183238 Sarah
     # 8d8ce8c9-44a4-46c4-b10f-9a927b99a853 Connie
@@ -79,14 +89,19 @@ async def main():
     # 02fe5732-a072-4767-83e3-a91d41d274ca Madison best friend
 
 
-    llm = OpenAILLMService(
-        api_key=os.getenv("LLM_API_KEY"),
-        base_url=os.getenv("LLM_BASE_URL") or None,
-        model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+    # llm = OpenAILLMService(
+    #     api_key=os.getenv("LLM_API_KEY"),
+    #     base_url=os.getenv("LLM_BASE_URL") or None,
+    #     model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
+    # )
+
+    llm = AnthropicLLMService(
+        api_key=os.getenv("ANTHROPIC_API_KEY"),
+        model="claude-haiku-4-5-20251001",  # or "claude-sonnet-4-6-20250514"
     )
 
     # Set up tools
-    board = Board()
+    task_manager = TaskManager()
     tools = [GetTime(), ListDirectory(), SearchFiles()]
     tools_schema = ToolsSchema(standard_tools=[t.to_function_schema() for t in tools])
 
@@ -111,7 +126,7 @@ async def main():
 
     # Orchestrator needs a reference to the pipeline task for notification delivery.
     # We create it with a None task first, then set it after pipeline construction.
-    orchestrator = Orchestrator(board, llm, context, pipeline_task=None)
+    orchestrator = Orchestrator(task_manager, llm, context, pipeline_task=None)
     for tool in tools:
         orchestrator.register(tool)
 

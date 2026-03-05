@@ -1,4 +1,4 @@
-"""Frame processor that injects Board state into the LLM context
+"""Frame processor that injects task state into the LLM context
 before each turn. Sits in the pipeline right before the LLM."""
 
 from loguru import logger
@@ -8,7 +8,7 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 
 class BoardContextInjector(FrameProcessor):
-    """Intercepts LLMRunFrame and updates the system message with Board state."""
+    """Intercepts LLMRunFrame and updates the system message with task state."""
 
     def __init__(self, orchestrator):
         super().__init__()
@@ -21,7 +21,7 @@ class BoardContextInjector(FrameProcessor):
             logger.info(f"[STT] User said: \"{frame.text}\"")
 
         if isinstance(frame, LLMRunFrame):
-            self._orchestrator.inject_board_context()
+            self._orchestrator.inject_task_context()
 
         # Always pass the frame through
         await self.push_frame(frame, direction)

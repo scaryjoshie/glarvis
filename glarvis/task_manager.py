@@ -1,4 +1,4 @@
-"""The Board — central state and message bus for active tasks.
+"""TaskManager — central state and lifecycle manager for async tasks.
 
 Tasks post updates here. The orchestrator subscribes and injects a snapshot
 into the LLM context before each turn. Notifications are queued and delivered
@@ -14,7 +14,7 @@ from typing import Any, Callable, Literal
 
 from loguru import logger
 
-from glarvis.tool import DisplayMode, GlarvisTool, NotificationLevel, TaskResult
+from glarvis.tool import DisplayMode, Tool, NotificationLevel, TaskResult
 
 
 @dataclass
@@ -22,7 +22,7 @@ class TaskState:
     """Tracks a single running or completed task."""
 
     id: str
-    tool: GlarvisTool
+    tool: Tool
     status: Literal["pending", "running", "completed", "failed", "expired"] = "pending"
     started_at: float = field(default_factory=time.time)
     completed_at: float | None = None
@@ -40,21 +40,21 @@ class Notification:
     level: NotificationLevel
 
 
-class Board:
-    """Central state manager for all Glarvis tasks.
+class TaskManager:
+    """Central state manager for all tasks.
 
     Usage::
 
-        board = Board()
+        task_manager = TaskManager()
 
         # Orchestrator subscribes to get notified of changes
-        board.on_notification = my_notification_handler
+        task_manager.on_notification = my_notification_handler
 
         # Spawn a task
-        task_id = await board.spawn(my_tool, kwargs={"query": "auth"})
+        task_id = await task_manager.spawn(my_tool, kwargs={"query": "auth"})
 
         # Get current state for LLM context injection
-        snapshot = board.snapshot()
+        snapshot = task_manager.snapshot()
     """
 
     def __init__(self, max_history: int = 20):
@@ -70,8 +70,8 @@ class Board:
         self._counter += 1
         return f"task_{self._counter}"
 
-    async def spawn(self, tool: GlarvisTool, kwargs: dict[str, Any]) -> str:
-        """Spawn a tool as an async task, tracked on the board."""
+    async def spawn(self, tool: Tool, kwargs: dict[str, Any]) -> str:
+        """Spawn a tool as an async task, tracked by the task manager."""
         task_id = self._next_id()
         state = TaskState(id=task_id, tool=tool, status="running")
         self.active[task_id] = state
@@ -79,7 +79,7 @@ class Board:
         async def _run():
             try:
                 await tool.on_start()
-                logger.info(f"[Board] {task_id} ({tool.name}) started")
+                logger.info(f"[TaskManager] {task_id} ({tool.name}) started")
 
                 if tool.ttl:
                     result = await asyncio.wait_for(tool.run(**kwargs), timeout=tool.ttl)
@@ -96,14 +96,14 @@ class Board:
                 state.status = "expired"
                 state.completed_at = time.time()
                 await tool.on_expire()
-                logger.warning(f"[Board] {task_id} ({tool.name}) expired (TTL={tool.ttl}s)")
+                logger.warning(f"[TaskManager] {task_id} ({tool.name}) expired (TTL={tool.ttl}s)")
                 self._finalize(task_id)
 
             except Exception as e:
                 state.status = "failed"
                 state.completed_at = time.time()
                 state.result = TaskResult(value=None, display_text=f"Error: {e}")
-                logger.error(f"[Board] {task_id} ({tool.name}) failed: {e}")
+                logger.error(f"[TaskManager] {task_id} ({tool.name}) failed: {e}")
                 self._finalize(task_id)
 
         state._task = asyncio.create_task(_run())
@@ -113,7 +113,7 @@ class Board:
         """Called by tools to report progress."""
         if task_id in self.active:
             self.active[task_id].progress = update
-            logger.debug(f"[Board] {task_id} progress: {update}")
+            logger.debug(f"[TaskManager] {task_id} progress: {update}")
 
     def _handle_completion(self, task_id: str, state: TaskState):
         """Route completion based on tool metadata."""
@@ -122,8 +122,8 @@ class Board:
 
         # Display routing
         if tool.display in ("board", "both") and result and result.display_text:
-            logger.info(f"[Board Display] {tool.name}: {result.display_text}")
-            # TODO: when we have a UI, send to display panel
+            logger.info(f"[TaskManager] {tool.name}: {result.display_text}")
+            # TODO: when we have a UI, send to Board display panel
             print(f"\n[{tool.name}] {result.display_text}")
 
         # Notification routing
@@ -155,7 +155,7 @@ class Board:
         return notifs
 
     def snapshot(self) -> str | None:
-        """Render current board state as text for LLM context injection.
+        """Render current task state as text for LLM context injection.
 
         Returns None if there's nothing to report, so we don't waste tokens."""
         lines = []
@@ -164,15 +164,15 @@ class Board:
             elapsed = time.time() - state.started_at
             status = state.tool.board_status(elapsed)
             if state.progress:
-                status += f' — "{state.progress}"'
+                status += f' -- "{state.progress}"'
             lines.append(f"  Running: {status}")
 
         # Show recent completions that might be relevant
         for state in list(self.history)[-5:]:
             if state.status == "completed" and state.result and state.result.display_text:
-                lines.append(f"  Completed: {state.tool.name} — {state.result.display_text}")
+                lines.append(f"  Completed: {state.tool.name} -- {state.result.display_text}")
             elif state.status == "failed" and state.result and state.result.display_text:
-                lines.append(f"  Failed: {state.tool.name} — {state.result.display_text}")
+                lines.append(f"  Failed: {state.tool.name} -- {state.result.display_text}")
 
         # Pending notifications the agent should be aware of
         for notif in self.pending_notifications:
@@ -181,4 +181,4 @@ class Board:
         if not lines:
             return None
 
-        return "[Board State]\n" + "\n".join(lines)
+        return "[Task State]\n" + "\n".join(lines)
