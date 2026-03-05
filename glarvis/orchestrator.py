@@ -66,14 +66,10 @@ class Orchestrator:
         # We use register_function with a handler that routes through the Board
         async def _handler(params: FunctionCallParams):
             result = await self._execute_tool(tool, params)
-            # Return result to LLM context
+            # Always pass results back to the LLM context so it remembers them.
+            # run_llm controls whether the LLM generates a spoken response about it.
             await params.result_callback(
                 result.value if result else None,
-                properties=FunctionCallResultProperties(
-                    # If display is "board" only, we don't need the LLM to talk about it
-                    # If display includes "speak", let the LLM incorporate the result
-                    run_llm=tool.display in ("speak", "both", "none"),
-                ),
             )
 
         self.llm.register_function(
