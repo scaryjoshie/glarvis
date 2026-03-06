@@ -113,52 +113,78 @@ Tools use `self.handle.open_popup(...)` instead of reaching into the orchestrato
 
 ---
 
-## 3. Popup Windows
+## 3. Popup Windows (Tauri Native Overlays)
 
 ### Problem
 
-Tools need to show UI outside the main app: multi-choice selectors, transcriber overlays, etc. These should work when the main app isn't in the foreground.
+Tools need to show UI outside the main app: multi-choice selectors, transcriber overlays, etc. These must be visible when the main app is in the background (e.g., user is working in another app and interacting by voice).
+
+Browser `window.open()` popups were rejected: blocked by popup blockers, can't stay always-on-top, look ugly with browser chrome, and disappear behind other windows.
 
 ### Design
 
-Popups are separate browser windows via `window.open()`. Each popup:
-- Is a Svelte-rendered page
-- Communicates with the main app via `window.postMessage()`
-- Main app relays messages over the existing WebSocket
-- Can be styled as minimal (via window features: no menubar, no toolbar)
+Popups are **Tauri native windows** via `WebviewWindow` from `@tauri-apps/api/webviewWindow`. Each popup:
+- Is a separate native window (frameless, always-on-top, centered, skip-taskbar)
+- Renders a Svelte component from `popup.html` (multi-page Vite build)
+- Communicates with the main window via **Tauri events** (`emit`/`listen` from `@tauri-apps/api/event`)
+- Main window relays actions over the existing WebSocket to the backend
+- Auto-closes itself after sending an action
 
 ### Message flow
 
 ```
-Backend                          Frontend (main)              Frontend (popup)
-   │                                  │                            │
-   ├─ ws: {type: "popup_open",        │                            │
-   │       popup_type, session_id,    │                            │
-   │       data}                      │                            │
-   │                                  ├─ window.open(url) ─────────►
-   │                                  │                            │ renders
-   │                                  │                            │
-   │◄── ws: {type: "popup_action",    │◄── postMessage ────────────┤ user acts
-   │        session_id, action,       │                            │
-   │        value}                    │                            │
-   │                                  │                            │
-   ├─ ws: {type: "popup_close",       │                            │
-   │       session_id}                │                            │
-   │                                  ├─ popup.close() ────────────►
+Backend                     Main window                  Popup window (Tauri)
+   │                             │                            │
+   ├─ ws: popup_open ───────────►│                            │
+   │                             ├─ new WebviewWindow() ─────►│ renders Svelte
+   │                             │                            │
+   │                             │◄── emit('popup-action') ───┤ user clicks/keys
+   │◄── ws: popup_action ────────┤                            │ self.close()
+   │                             │                            │
+   ├─ ws: popup_close ──────────►│                            │
+   │                             ├─ win.close() ─────────────►│
 ```
 
-### Popup types (initial)
+### Window properties
 
-- `multi_choice` — numbered options, select by number/voice
+```javascript
+new WebviewWindow(label, {
+  url: 'popup.html#<encoded-data>',
+  decorations: false,     // no title bar
+  alwaysOnTop: true,      // visible over other apps
+  center: true,           // centered on screen
+  resizable: false,
+  skipTaskbar: true,      // no taskbar entry
+  width: 420, height: 360,
+  transparent: false,     // WebView2 transparency is broken on Windows
+});
+```
+
+### Popup types
+
+- `multi_choice` — numbered options, select by number key/click/voice
 
 ### Frontend structure
 
 ```
-web/src/
-  lib/popups/
-    MultiChoice.svelte    # multi-choice popup content
-    popup.js              # shared: open, message relay, registry
-  popup.html              # minimal HTML shell for popup windows
+web/
+  popup.html                  # minimal HTML shell (dark bg, loads popup.js)
+  src/popup.js                # reads hash data, mounts correct Svelte component
+  src/lib/popups/
+    MultiChoice.svelte        # multi-choice popup UI + Tauri event emitting
+```
+
+### Tauri permissions required
+
+```json
+// web/src-tauri/capabilities/default.json
+{
+  "windows": ["main", "popup_*"],
+  "permissions": [
+    "core:window:allow-create", "core:window:allow-close",
+    "core:webview:allow-create-webview-window", "core:event:default"
+  ]
+}
 ```
 
 ---
@@ -185,63 +211,15 @@ First concrete use of session context + popups.
 
 The LLM naturally maps "two" / "the second one" / "option two" to `select_option(number=2)`. "Nevermind" / "close" maps to `dismiss()`. Freeform input that isn't a number is just normal conversation — the session handles it via `on_input()`.
 
-### Implementation sketch
+### Implementation
 
-```python
-class MultiChoiceSession(SessionTool):
-    name = "show_choices"
-    description = "Show a popup with numbered options for the user to pick from."
-    parameters = {
-        "options": {"type": "array", "items": {"type": "string"},
-                    "description": "List of options"},
-        "prompt": {"type": "string", "description": "Question for the user"},
-    }
-    required = ["options"]
-    persist_in_display = False  # transient
+See `backend/glarvis/tools/multi_choice.py`. Key design choices:
 
-    async def run(self, options=[], prompt="", **kwargs):
-        self._options = options
-        await self.handle.open_popup("multi_choice", {
-            "prompt": prompt, "options": options,
-        })
-        return TaskResult(
-            result="Choices displayed",
-            guide=f"I've put {len(options)} options on screen. Pick a number.",
-        )
-
-    def get_context_tools(self):
-        return [
-            FunctionSchema(
-                name="select_option",
-                description="Select a displayed option by number.",
-                properties={"number": {"type": "integer"}},
-                required=["number"],
-            ),
-            FunctionSchema(
-                name="dismiss",
-                description="Close the choices without selecting.",
-                properties={}, required=[],
-            ),
-        ]
-
-    async def handle_context_call(self, tool_name, **kwargs):
-        if tool_name == "select_option":
-            n = kwargs.get("number", 0)
-            if 1 <= n <= len(self._options):
-                choice = self._options[n - 1]
-                await self.handle.close_popup()
-                return TaskResult(result=choice, guide=f"Selected: {choice}")
-            return TaskResult(result=None, guide="Invalid number")
-        elif tool_name == "dismiss":
-            await self.handle.close_popup()
-            return TaskResult(result=None, guide="Dismissed")
-
-    async def on_input(self, **kwargs):
-        return TaskResult(result=None, guide="Pick a number or say dismiss")
-
-    async def close(self):
-        await self.handle.close_popup()
-```
+- `run()` blocks on `asyncio.Event` — keeps the session alive in TaskManager until a choice is made or dismissed
+- `cancel_on_interruption = False` — user interruption shouldn't kill the popup
+- `persist_in_display = False` — transient, auto-hides after completion
+- Popup auto-closes itself after emitting an action (no dangling windows)
+- Two convergent paths: voice ("two" → LLM → `select_option(2)`) and click (popup → Tauri event → WS → `handle_popup_action` → `handle_context_call`)
 
 ---
 

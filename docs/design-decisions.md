@@ -94,6 +94,29 @@ Future interactive board: structured `actions` in TaskResult (buttons, forms), n
 
 ---
 
+## Tauri (Desktop App Wrapper)
+
+### Why Tauri over browser-only?
+
+Popup overlays need to be visible when the main app is in the background (voice assistant use case). Browser `window.open()` popups: get blocked by popup blockers, can't be always-on-top, show browser chrome, and disappear behind other windows.
+
+### Why Tauri over Electron?
+
+- ~5MB bundle vs ~150MB (Electron ships Chromium; Tauri uses system WebView2)
+- Rust backend for native APIs (window management, system tray, etc.)
+- Built-in transparent/frameless/always-on-top window APIs
+- Lighter resource usage
+
+Trade-off: smaller ecosystem, less mature tooling, WebView2 has some quirks (e.g., `transparent: true` makes everything invisible on Windows — we use solid dark backgrounds instead).
+
+Electron is a viable fallback if we hit Tauri limitations. The frontend is standard Svelte/Vite — only the native window APIs would need swapping.
+
+### Popup communication
+
+Popups use **Tauri events** (`emit`/`listen` from `@tauri-apps/api/event`) instead of `window.postMessage()`. Events work across Tauri windows natively. The main window listens for `popup-action` events and relays them over WebSocket to the backend.
+
+---
+
 ## Transport and Echo Cancellation
 
 SmallWebRTCTransport runs audio through the browser, which provides native AEC. This solved the feedback loop from the old LocalAudioTransport (PyAudio) approach.

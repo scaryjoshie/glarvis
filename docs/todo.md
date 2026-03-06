@@ -2,19 +2,6 @@
 
 ## Next Up (build order)
 
-### 3. Popup infrastructure
-- WebSocket message types: `popup_open`, `popup_close`, `popup_action`
-- `window.open()` wrapper in frontend
-- `postMessage` relay from popup → main app → WebSocket
-- Minimal popup HTML shell + Svelte rendering
-- Frontend: `web/src/lib/popups/`
-
-### 4. Multi-choice selector
-- First SessionTool using context + popups
-- `show_choices(options, prompt)` → opens popup, injects select_option/dismiss
-- LLM naturally maps "two" → `select_option(number=2)`
-- `persist_in_display = False` (transient)
-
 ### 5. SystemMonitor
 - Background update loop for live system state
 - `WindowInfo` with stable integer IDs (no spelling issues for LLM)
@@ -45,6 +32,9 @@
 
 ## Done
 
+- Popup infrastructure — Tauri native overlay windows (frameless, always-on-top, centered), WebSocket message types (`popup_open`, `popup_close`, `popup_action`), Tauri events for popup→main communication, multi-page Vite build (`popup.html`)
+- Multi-choice selector — `MultiChoiceSession` SessionTool, `run()` blocks on `asyncio.Event`, injects `select_option`/`dismiss` context tools, voice and click paths both route through `handle_context_call()`, popup auto-closes on action
+- Tauri migration — native desktop app wrapper (WebView2 on Windows), enables native overlay popups visible over other apps, `web/src-tauri/` config
 - Session context system (get_context_tools, handle_context_call, dynamic LLMContext.tools, enter/exit_session tools, chip click → context toggle, on_input routing, auto-enter/exit context)
 - ToolHandle (scoped API: post_to_board, open_popup, close_popup — subclass pattern with _OrchestratorToolHandle)
 - Tool type system (BaseTool ABC → InlineTool/AsyncTool/SessionTool)

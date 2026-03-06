@@ -33,11 +33,11 @@ export async function openPopup(popupType, toolName, data) {
   console.log('[Popup] Opening Tauri window:', popupType, toolName);
   const overlay = new WebviewWindow(label, {
     url,
-    title: '',
+    title: 'Minerva',
     width: 420,
     height: 360,
     decorations: false,
-    transparent: true,
+    transparent: false,
     alwaysOnTop: true,
     center: true,
     resizable: false,

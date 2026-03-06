@@ -284,6 +284,7 @@ class Orchestrator:
         """Handle a direct action from a popup window (user clicked something).
 
         Finds the active session matching tool_name and routes to handle_context_call.
+        Then injects the result as user text so the LLM can respond.
         """
         for task_id, state in self._active_contexts.items():
             if isinstance(state.tool, SessionTool) and state.tool.name == tool_name:
@@ -302,6 +303,17 @@ class Orchestrator:
                     tool_args=data,
                     tool_result=result.result if result else None,
                 )
+
+                # Inject the result as user text so the LLM sees and responds
+                if result and result.guide and self.pipeline_task:
+                    from pipecat.frames.frames import TranscriptionFrame
+                    frame = TranscriptionFrame(
+                        text=f"[{result.guide}]",
+                        user_id="popup",
+                        timestamp=str(time.time()),
+                    )
+                    await self.pipeline_task.queue_frame(frame)
+
                 return
 
         logger.warning(f"[Orchestrator] No active session for popup action: {tool_name}")
