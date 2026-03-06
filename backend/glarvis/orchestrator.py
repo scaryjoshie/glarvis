@@ -22,11 +22,42 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 
 from glarvis.task_manager import TaskManager, Notification, TaskState
-from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult
+from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult, ToolHandle
 
 if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
     from pipecat.services.llm_service import LLMService
+
+
+class _OrchestratorToolHandle(ToolHandle):
+    """Concrete ToolHandle backed by the orchestrator. One per tool."""
+
+    def __init__(self, orchestrator: Orchestrator, tool_name: str):
+        self._orchestrator = orchestrator
+        self._tool_name = tool_name
+
+    async def post_to_board(self, content: str, author: str | None = None) -> int:
+        return await self._orchestrator.broadcast_board_post(
+            author or self._tool_name, content,
+        )
+
+    async def open_popup(self, popup_type: str, data: dict) -> None:
+        if not self._orchestrator._broadcast:
+            return
+        await self._orchestrator._broadcast({
+            "type": "popup_open",
+            "popup_type": popup_type,
+            "tool_name": self._tool_name,
+            "data": data,
+        })
+
+    async def close_popup(self) -> None:
+        if not self._orchestrator._broadcast:
+            return
+        await self._orchestrator._broadcast({
+            "type": "popup_close",
+            "tool_name": self._tool_name,
+        })
 
 
 class Orchestrator:
@@ -141,6 +172,7 @@ class Orchestrator:
     def register(self, tool: BaseTool):
         """Register a tool with both the TaskManager and the LLM."""
         self._tools[tool.name] = tool
+        tool.handle = _OrchestratorToolHandle(self, tool.name)
         self._register_handler(tool.name)
         logger.info(f"[Orchestrator] Registered tool: {tool.name}")
 

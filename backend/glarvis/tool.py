@@ -32,6 +32,26 @@ class TaskResult:
     board_content: str | None = None  # rich markdown for Board stream
 
 
+class ToolHandle:
+    """Scoped API for tool-to-system communication. Set by orchestrator at registration.
+
+    Decouples tools from orchestrator internals. Tools use self.handle.post_to_board()
+    instead of reaching into the orchestrator.
+    """
+
+    async def post_to_board(self, content: str, author: str | None = None) -> int:
+        """Post markdown to the board. Returns post index."""
+        raise NotImplementedError
+
+    async def open_popup(self, popup_type: str, data: dict) -> None:
+        """Tell frontend to open a popup window."""
+        raise NotImplementedError
+
+    async def close_popup(self) -> None:
+        """Tell frontend to close this tool's popup."""
+        raise NotImplementedError
+
+
 class BaseTool(ABC):
     """Abstract base for all tools. Do not subclass directly —
     use InlineTool, AsyncTool, or SessionTool."""
@@ -46,6 +66,9 @@ class BaseTool(ABC):
     notification: NotificationLevel = "silent"
     display: DisplayMode = "none"
     cancel_on_interruption: bool = True
+
+    # ── Set by orchestrator at registration ─────────────────────────────
+    handle: ToolHandle | None = None
 
     # ── Core execution ────────────────────────────────────────────────────
 
