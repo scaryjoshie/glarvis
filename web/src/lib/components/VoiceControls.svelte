@@ -1,5 +1,5 @@
 <script>
-  import { connectionState, muted, deafened } from '../stores/connection.js';
+  import { connectionState, muted, deafened, voiceMuted } from '../stores/connection.js';
   import { connectWebSocket, connectWebRTC, disconnect, toggleMute, toggleDeafen, sendText } from '../stores/connection.js';
 
   $: connected = $connectionState === 'connected';
@@ -19,12 +19,14 @@
   <!-- Voice connection status -->
   <div class="voice-status">
     <div class="voice-status-left">
-      <span class="voice-dot" class:connected class:connecting></span>
+      <span class="voice-dot" class:connected={connected && !$muted && !$voiceMuted} class:connecting class:hard-muted={$muted} class:soft-muted={!$muted && $voiceMuted}></span>
       <div class="voice-info">
-        <span class="voice-label" class:connected class:connecting>
-          {#if connected}Voice Connected{:else if connecting}Connecting...{:else}Voice Disconnected{/if}
+        <span class="voice-label" class:connected={connected && !$muted && !$voiceMuted} class:connecting class:hard-muted={$muted} class:soft-muted={!$muted && $voiceMuted}>
+          {#if $muted}True Mute{:else if $voiceMuted}Soft Mute{:else if connected}Voice Connected{:else if connecting}Connecting...{:else}Voice Disconnected{/if}
         </span>
-        <span class="voice-sub">Claude Haiku 4.5</span>
+        <span class="voice-sub">
+          {#if $muted}Click to unmute{:else if $voiceMuted}Say "unmute" or click to resume{:else}Claude Haiku 4.5{/if}
+        </span>
       </div>
     </div>
     <button
@@ -70,8 +72,8 @@
 
   <!-- User controls: mute, deafen, settings -->
   <div class="user-controls">
-    <button class="ctrl-btn" class:active={$muted} on:click={toggleMute} disabled={!connected} title={$muted ? 'Unmute' : 'Mute'}>
-      {#if $muted}
+    <button class="ctrl-btn" class:active={$muted} class:soft-active={!$muted && $voiceMuted} on:click={toggleMute} disabled={!connected} title={$muted ? 'Unmute' : $voiceMuted ? 'Unmute (soft)' : 'Mute'}>
+      {#if $muted || $voiceMuted}
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.13 1.49-.36 2.18"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
         </svg>
@@ -140,6 +142,14 @@
     animation: pulse 1s infinite;
   }
 
+  .voice-dot.hard-muted {
+    background: var(--color-red);
+  }
+
+  .voice-dot.soft-muted {
+    background: var(--color-yellow);
+  }
+
   .voice-info {
     display: flex;
     flex-direction: column;
@@ -156,6 +166,14 @@
   }
 
   .voice-label.connecting {
+    color: var(--color-yellow);
+  }
+
+  .voice-label.hard-muted {
+    color: var(--color-red);
+  }
+
+  .voice-label.soft-muted {
     color: var(--color-yellow);
   }
 
@@ -272,6 +290,11 @@
   .ctrl-btn.active {
     color: var(--color-red);
     background: rgba(248, 113, 113, 0.1);
+  }
+
+  .ctrl-btn.soft-active {
+    color: var(--color-yellow);
+    background: rgba(250, 204, 21, 0.1);
   }
 
   @keyframes pulse {

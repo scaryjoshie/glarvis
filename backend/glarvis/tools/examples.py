@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 from glarvis.tool import AsyncTool, InlineTool, TaskResult
 
 if TYPE_CHECKING:
+    from glarvis.mute_gate import MuteGate
     from glarvis.orchestrator import Orchestrator
 
 
@@ -101,6 +102,20 @@ class WriteBoard(InlineTool):
             result="Posted to board",
             board_content=md,
         )
+
+
+class Mute(InlineTool):
+    """Mute voice input. User can say 'unmute' to resume."""
+
+    name = "mute"
+    description = "Mute voice input so Minerva stops listening. The user can say 'unmute' to resume."
+
+    def __init__(self, mute_gate: MuteGate):
+        self._gate = mute_gate
+
+    async def run(self, **kwargs) -> TaskResult:
+        await self._gate.set_muted(True)
+        return TaskResult(result="muted", guide="Muted. Say unmute when you're ready.")
 
 
 class DebugContext(InlineTool):

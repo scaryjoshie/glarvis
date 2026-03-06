@@ -36,10 +36,11 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from glarvis.context_injector import BoardContextInjector
+from glarvis.mute_gate import MuteGate
 from glarvis.orchestrator import Orchestrator
 from glarvis.response_capture import ResponseCapture
 from glarvis.task_manager import TaskManager
-from glarvis.tools.examples import DebugContext, EnterSession, ExitSession, GetTime, ListDirectory, ListTools, SearchFiles, WriteBoard
+from glarvis.tools.examples import DebugContext, EnterSession, ExitSession, GetTime, ListDirectory, ListTools, Mute, SearchFiles, WriteBoard
 from glarvis.tools.multi_choice import MultiChoiceSession
 from glarvis.transcript_capture import TranscriptCapture
 
@@ -77,6 +78,7 @@ request_handler = SmallWebRTCRequestHandler()
 ws_clients: set[WebSocket] = set()
 active_pipeline_task: PipelineTask | None = None
 active_orchestrator: Orchestrator | None = None
+active_mute_gate: MuteGate | None = None
 
 
 async def broadcast(msg: dict):
@@ -106,6 +108,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     await _inject_user_text(msg["text"].strip())
                 elif msg.get("type") == "context_toggle" and msg.get("task_id"):
                     _handle_context_toggle(msg["task_id"])
+                elif msg.get("type") == "soft_unmute":
+                    await _handle_soft_unmute()
+                elif msg.get("type") == "hard_mute":
+                    _handle_hard_mute(msg.get("muted", False))
                 elif msg.get("type") == "popup_action":
                     await _handle_popup_action(
                         msg.get("tool_name", ""),
@@ -125,6 +131,19 @@ def _handle_context_toggle(task_id: str):
         logger.warning("[Server] No active orchestrator for context toggle")
         return
     active_orchestrator.toggle_context(task_id)
+
+
+async def _handle_soft_unmute():
+    """Clear the voice gate when user clicks unmute from soft-muted state."""
+    if active_mute_gate and active_mute_gate.muted:
+        await active_mute_gate.set_muted(False)
+
+
+def _handle_hard_mute(muted: bool):
+    """Track client-side hard mute state."""
+    if active_mute_gate:
+        active_mute_gate.hard_muted = muted
+        logger.info(f"[Server] Hard mute: {muted}")
 
 
 async def _handle_popup_action(tool_name: str, action: str, data: dict):
@@ -216,7 +235,9 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     orchestrator = Orchestrator(task_manager, llm, temp_context, pipeline_task=None)
 
     # Register all tools
-    for tool in [GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), MultiChoiceSession()]:
+    mute_gate = MuteGate(broadcast=broadcast)
+
+    for tool in [GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), MultiChoiceSession(), Mute(mute_gate)]:
         orchestrator.register(tool)
     orchestrator.register(ListTools(orchestrator))
     orchestrator.register(DebugContext(orchestrator))
@@ -256,6 +277,7 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
         [
             transport.input(),
             stt,
+            mute_gate,
             transcript_capture,
             user_aggregator,
             injector,
@@ -277,9 +299,10 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     orchestrator.pipeline_task = task
 
-    global active_pipeline_task, active_orchestrator
+    global active_pipeline_task, active_orchestrator, active_mute_gate
     active_pipeline_task = task
     active_orchestrator = orchestrator
+    active_mute_gate = mute_gate
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -289,10 +312,11 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        global active_pipeline_task, active_orchestrator
+        global active_pipeline_task, active_orchestrator, active_mute_gate
         logger.info("[Server] Client disconnected from WebRTC")
         active_pipeline_task = None
         active_orchestrator = None
+        active_mute_gate = None
         await task.cancel()
 
     # Run pipeline in background so the HTTP response returns immediately

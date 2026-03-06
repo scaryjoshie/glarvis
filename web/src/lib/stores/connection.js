@@ -6,11 +6,18 @@ export const connectionState = writable('disconnected'); // disconnected | conne
 export const agentState = writable('idle'); // idle | listening | thinking | speaking
 export const muted = writable(false);
 export const deafened = writable(false);
+export const voiceMuted = writable(false); // server-side voice gate (say "mute"/"unmute")
 
 export const tasks = writable([]);
 export const transcript = writable([]);
 export const boardStream = writable([]);    // array of {author, content, timestamp}
 export const boardFocused = writable(null);  // currently focused item index
+
+// ── Sound effects ────────────────────────────────────────────────────────────
+
+function playSound(name) {
+  try { new Audio(`/sounds/${name}.mp3`).play(); } catch {}
+}
 
 let ws = null;
 
@@ -101,6 +108,10 @@ export function connectWebSocket() {
       case 'agent_state':
         agentState.set(msg.state);
         break;
+      case 'mute_state':
+        voiceMuted.set(msg.muted);
+        playSound(msg.muted ? 'mute' : 'unmute');
+        break;
       case 'popup_open':
         openPopup(msg.popup_type, msg.tool_name, msg.data);
         break;
@@ -163,6 +174,7 @@ export async function connectWebRTC() {
       console.log('[WebRTC] Connection state:', pc.connectionState);
       if (pc.connectionState === 'connected') {
         connectionState.set('connected');
+        playSound('join');
       } else if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         connectionState.set('disconnected');
       }
@@ -214,9 +226,27 @@ let remoteAudio = null;
 
 export function toggleMute() {
   if (!localStream) return;
+
+  // If soft-muted, clicking unmutes the server gate (not a local mic toggle)
+  let vm = false;
+  const unsub = voiceMuted.subscribe(v => vm = v);
+  unsub();
+  if (vm) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'soft_unmute' }));
+    }
+    playSound('unmute');
+    return;
+  }
+
+  // Normal hard mute toggle
   muted.update(m => {
     const next = !m;
     localStream.getAudioTracks().forEach(t => t.enabled = !next);
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'hard_mute', muted: next }));
+    }
+    playSound(next ? 'mute' : 'unmute');
     return next;
   });
 }
@@ -252,6 +282,7 @@ function clearSessionState() {
   boardFocused.set(null);
   tasks.set([]);
   agentState.set('idle');
+  voiceMuted.set(false);
   // Close all open popups
   for (const [toolName] of openPopups) {
     closePopup(toolName);
@@ -259,6 +290,7 @@ function clearSessionState() {
 }
 
 export function disconnect() {
+  playSound('leave');
   if (pc) {
     pc.close();
     pc = null;
