@@ -39,7 +39,7 @@ from glarvis.context_injector import BoardContextInjector
 from glarvis.orchestrator import Orchestrator
 from glarvis.response_capture import ResponseCapture
 from glarvis.task_manager import TaskManager
-from glarvis.tools.examples import DebugContext, GetTime, ListDirectory, ListTools, SearchFiles, WriteBoard
+from glarvis.tools.examples import DebugContext, EnterSession, ExitSession, GetTime, ListDirectory, ListTools, SearchFiles, WriteBoard
 from glarvis.transcript_capture import TranscriptCapture
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
@@ -85,6 +85,7 @@ request_handler = SmallWebRTCRequestHandler()
 
 ws_clients: set[WebSocket] = set()
 active_pipeline_task: PipelineTask | None = None
+active_orchestrator: Orchestrator | None = None
 
 
 async def broadcast(msg: dict):
@@ -112,11 +113,21 @@ async def websocket_endpoint(websocket: WebSocket):
                 msg = json.loads(raw)
                 if msg.get("type") == "user_text" and msg.get("text", "").strip():
                     await _inject_user_text(msg["text"].strip())
+                elif msg.get("type") == "context_toggle" and msg.get("task_id"):
+                    _handle_context_toggle(msg["task_id"])
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
         ws_clients.discard(websocket)
         logger.info(f"[WS] Client disconnected ({len(ws_clients)} total)")
+
+
+def _handle_context_toggle(task_id: str):
+    """Toggle session context when user clicks a session chip."""
+    if not active_orchestrator:
+        logger.warning("[Server] No active orchestrator for context toggle")
+        return
+    active_orchestrator.toggle_context(task_id)
 
 
 async def _inject_user_text(text: str):
@@ -204,6 +215,8 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
         orchestrator.register(tool)
     orchestrator.register(ListTools(orchestrator))
     orchestrator.register(DebugContext(orchestrator))
+    orchestrator.register(EnterSession(orchestrator))
+    orchestrator.register(ExitSession(orchestrator))
 
     # Now build the real context with tools schema
     context = LLMContext(
@@ -259,8 +272,9 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     orchestrator.pipeline_task = task
 
-    global active_pipeline_task
+    global active_pipeline_task, active_orchestrator
     active_pipeline_task = task
+    active_orchestrator = orchestrator
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -270,9 +284,10 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        global active_pipeline_task
+        global active_pipeline_task, active_orchestrator
         logger.info("[Server] Client disconnected from WebRTC")
         active_pipeline_task = None
+        active_orchestrator = None
         await task.cancel()
 
     # Run pipeline in background so the HTTP response returns immediately

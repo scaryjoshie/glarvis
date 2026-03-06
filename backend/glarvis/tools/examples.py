@@ -162,6 +162,46 @@ class DebugContext(InlineTool):
         )
 
 
+class EnterSession(InlineTool):
+    """Activate a session's context, making its tools available."""
+
+    name = "enter_session"
+    description = "Enter an active session's context by task number, making its tools available. Use the number from the task ID (e.g. 1 for task_1)."
+    parameters = {
+        "id": {"type": "integer", "description": "Task number to enter context for"},
+    }
+    required = ["id"]
+
+    def __init__(self, orchestrator: Orchestrator):
+        self._orchestrator = orchestrator
+
+    async def run(self, id: int = 0, **kwargs) -> TaskResult:
+        task_id = f"task_{id}"
+        if self._orchestrator.enter_context(task_id):
+            return TaskResult(result=f"Entered context for {task_id}", guide="Context activated")
+        return TaskResult(result=f"Failed to enter context for {task_id}", guide="No such session")
+
+
+class ExitSession(InlineTool):
+    """Deactivate a session's context, removing its temporary tools."""
+
+    name = "exit_session"
+    description = "Exit an active session's context by task number, removing its temporary tools."
+    parameters = {
+        "id": {"type": "integer", "description": "Task number to exit context for"},
+    }
+    required = ["id"]
+
+    def __init__(self, orchestrator: Orchestrator):
+        self._orchestrator = orchestrator
+
+    async def run(self, id: int = 0, **kwargs) -> TaskResult:
+        task_id = f"task_{id}"
+        if self._orchestrator.exit_context(task_id):
+            return TaskResult(result=f"Exited context for {task_id}", guide="Context deactivated")
+        return TaskResult(result=f"No active context for {task_id}", guide="Nothing to exit")
+
+
 class ListTools(InlineTool):
     """Lists all available tools on the board."""
 

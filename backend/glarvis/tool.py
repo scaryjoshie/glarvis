@@ -143,6 +143,10 @@ class SessionTool(AsyncTool):
     like Claude Code, browser automation, or anything that maintains state
     across multiple interactions.
 
+    Session context: when a session's context is active, its context tools
+    are injected into the LLM prompt. Override get_context_tools() and
+    handle_context_call() to provide temporary capabilities.
+
     Example::
 
         class ClaudeCode(SessionTool):
@@ -164,11 +168,21 @@ class SessionTool(AsyncTool):
 
     ttl: int | None = None
     persist_in_display: bool = True  # session tools stay visible by default
+    auto_enter_context: bool = True  # enter context automatically on run()
 
     @abstractmethod
     async def on_input(self, **kwargs) -> TaskResult:
         """Handle subsequent input to an active session."""
         ...
+
+    def get_context_tools(self) -> list[FunctionSchema]:
+        """Tools available while this session's context is active.
+        Override to inject temporary tools. Can vary based on state."""
+        return []
+
+    async def handle_context_call(self, tool_name: str, **kwargs) -> TaskResult:
+        """Handle a call to one of this session's context tools."""
+        return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
 
     async def close(self) -> None:
         """Clean up the session. Called when the task is cancelled or dismissed."""

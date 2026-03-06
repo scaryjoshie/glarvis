@@ -1,8 +1,10 @@
 <script>
   import { tasks, boardFocused } from '../stores/connection.js';
+  import { sendContextToggle } from '../stores/connection.js';
 
-  function statusColor(status) {
-    switch (status) {
+  function statusColor(task) {
+    if (task.context_active) return 'var(--color-purple, #a855f7)';
+    switch (task.status) {
       case 'running': return 'var(--color-blue)';
       case 'completed': return 'var(--color-green)';
       case 'failed':
@@ -17,7 +19,10 @@
   }
 
   function handleChipClick(task) {
-    if (task.board_post_index !== null && task.board_post_index !== undefined) {
+    if (task.is_session) {
+      // Session chips toggle context
+      sendContextToggle(task.id);
+    } else if (task.board_post_index !== null && task.board_post_index !== undefined) {
       boardFocused.set(task.board_post_index);
     }
   }
@@ -35,11 +40,12 @@
       {#each $tasks as task (task.id)}
         <button
           class="task-chip"
-          class:clickable={task.board_post_index !== null && task.board_post_index !== undefined}
+          class:clickable={task.is_session || (task.board_post_index !== null && task.board_post_index !== undefined)}
+          class:context-active={task.context_active}
           on:click={() => handleChipClick(task)}
-          title="{task.name}: {task.progress || task.status} ({formatElapsed(task.elapsed)})"
+          title="{task.name}: {task.progress || task.status} ({formatElapsed(task.elapsed)}){task.context_active ? ' [context active]' : ''}"
         >
-          <span class="chip-dot" style="background: {statusColor(task.status)}">
+          <span class="chip-dot" style="background: {statusColor(task)}">
             {#if task.status === 'running'}
               <span class="chip-spin"></span>
             {/if}
@@ -102,7 +108,7 @@
     font-size: 12px;
     cursor: default;
     flex-shrink: 0;
-    transition: background 0.15s;
+    transition: background 0.15s, border-color 0.15s;
     color: inherit;
     font-family: inherit;
   }
@@ -117,6 +123,11 @@
 
   .task-chip.clickable:hover {
     border-color: var(--color-blue);
+  }
+
+  .task-chip.context-active {
+    border-color: var(--color-purple, #a855f7);
+    background: rgba(168, 85, 247, 0.1);
   }
 
   .chip-dot {

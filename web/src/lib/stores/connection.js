@@ -181,6 +181,12 @@ export function sendText(text) {
   }
 }
 
+export function sendContextToggle(taskId) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'context_toggle', task_id: taskId }));
+  }
+}
+
 function clearSessionState() {
   transcript.set([]);
   boardStream.set([]);

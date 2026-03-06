@@ -68,6 +68,7 @@ class TaskManager:
         self.on_notification: Callable[[Notification], Any] | None = None
         self.on_change: Callable[[], Any] | None = None
         self.on_board_post: Callable[[str, str, str], Any] | None = None  # (task_id, author, content)
+        self.on_finalize: Callable[[str], Any] | None = None  # (task_id)
 
     def _next_id(self) -> str:
         self._counter += 1
@@ -157,6 +158,8 @@ class TaskManager:
         if task_id in self.active:
             state = self.active.pop(task_id)
             self.history.append(state)
+            if self.on_finalize:
+                self.on_finalize(task_id)
             self._notify_change()
 
     def drain_notifications(self) -> list[Notification]:
