@@ -1,10 +1,7 @@
 """Orchestrator — wires Tools into the Pipecat pipeline.
 
-Responsibilities:
-1. Registers tools with the LLM service (schema for LLM, handler for system)
-2. Injects task state into LLM context before each turn
-3. Delivers notifications via TTS when tasks complete
-4. Manages session context (dynamic tool injection for active sessions)
+Registers tools, routes tool calls, manages session context,
+and prepares LLM context before each turn.
 """
 
 from __future__ import annotations
@@ -15,9 +12,8 @@ from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from loguru import logger
 
-from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.frames.frames import TTSSpeakFrame
+from pipecat.frames.frames import TranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 
@@ -30,51 +26,28 @@ if TYPE_CHECKING:
 
 
 class _OrchestratorToolHandle(ToolHandle):
-    """Concrete ToolHandle backed by the orchestrator. One per tool."""
+    """Concrete ToolHandle backed by the orchestrator."""
 
-    def __init__(self, orchestrator: Orchestrator, tool_name: str):
-        self._orchestrator = orchestrator
-        self._tool_name = tool_name
+    def __init__(self, orch: Orchestrator, tool_name: str):
+        self._orch = orch
+        self._name = tool_name
 
     async def post_to_board(self, content: str, author: str | None = None) -> int:
-        return await self._orchestrator.broadcast_board_post(
-            author or self._tool_name, content,
-        )
+        return await self._orch.broadcast_board_post(author or self._name, content)
 
     async def open_popup(self, popup_type: str, data: dict) -> None:
-        if not self._orchestrator._broadcast:
-            return
-        await self._orchestrator._broadcast({
-            "type": "popup_open",
-            "popup_type": popup_type,
-            "tool_name": self._tool_name,
-            "data": data,
+        await self._orch._broadcast_msg({
+            "type": "popup_open", "popup_type": popup_type,
+            "tool_name": self._name, "data": data,
         })
 
     async def close_popup(self) -> None:
-        if not self._orchestrator._broadcast:
-            return
-        await self._orchestrator._broadcast({
-            "type": "popup_close",
-            "tool_name": self._tool_name,
+        await self._orch._broadcast_msg({
+            "type": "popup_close", "tool_name": self._name,
         })
 
 
 class Orchestrator:
-    """Connects Tools, the TaskManager, and the Pipecat pipeline.
-
-    Usage::
-
-        task_manager = TaskManager()
-        orchestrator = Orchestrator(task_manager, llm, context, task)
-
-        # Register tools
-        orchestrator.register(SearchFiles())
-        orchestrator.register(CheckCalendar())
-
-        # Tools are now available to the LLM, results route through the TaskManager
-    """
-
     def __init__(
         self,
         task_manager: TaskManager,
@@ -91,409 +64,301 @@ class Orchestrator:
         self._transcript_id = 0
         self._board_post_index = 0
 
-        # Session context tracking
-        # task_id → TaskState for sessions with active context
-        self._active_contexts: dict[str, TaskState] = {}
-        # context tool name → task_id (for routing context tool calls)
-        self._context_tool_map: dict[str, str] = {}
+        self._active_contexts: dict[str, TaskState] = {}  # task_id → TaskState
+        self._context_tool_map: dict[str, str] = {}  # context tool name → task_id
 
-        # Wire up notification delivery
         self.task_manager.on_notification = self._on_notification
         self.task_manager.on_change = self._on_task_change
         self.task_manager.on_board_post = self._on_board_post
         self.task_manager.on_finalize = self._on_task_finalize
 
-        # Inject task state before each LLM turn by patching context
         self._original_system_message = context.messages[0]["content"] if context.messages else ""
 
+    # ── Broadcasting ─────────────────────────────────────────────────────────
+
     def set_broadcast(self, broadcast_fn: Callable[[dict], Coroutine]):
-        """Set the broadcast function for sending UI updates."""
         self._broadcast = broadcast_fn
 
-    def _next_transcript_id(self) -> int:
-        self._transcript_id += 1
-        return self._transcript_id
+    async def _broadcast_msg(self, msg: dict):
+        if self._broadcast:
+            await self._broadcast(msg)
 
     async def broadcast_board_post(self, author: str, content: str) -> int:
-        """Send a board post to the UI. Returns the post index."""
         index = self._board_post_index
         self._board_post_index += 1
-        if not self._broadcast:
-            return index
-        await self._broadcast({
-            "type": "board_post",
-            "author": author,
-            "content": content,
-            "timestamp": time.time(),
+        await self._broadcast_msg({
+            "type": "board_post", "author": author,
+            "content": content, "timestamp": time.time(),
         })
         return index
-
-    async def broadcast_welcome(self):
-        """Post available tools to the board on connection."""
-        if not self._tools:
-            return
-
-        lines = ["# Minerva\n"]
-        for tool in self._tools.values():
-            tool_type = type(tool).__bases__[0].__name__
-            tag = {"InlineTool": "instant", "AsyncTool": "background", "SessionTool": "session"}.get(tool_type, tool_type)
-            lines.append(f"### {tool.name}")
-            lines.append(f"`{tag}` {tool.description}\n")
-
-        lines.append("---")
-        lines.append("*Say or type anything to get started.*")
-
-        await self.broadcast_board_post("minerva", "\n".join(lines))
 
     async def broadcast_transcript(
         self, role: str, text: str, entry_type: str = "speech",
         tool: str | None = None, tool_args: dict | None = None,
         tool_result: Any = None,
     ):
-        """Send a transcript entry to the UI."""
-        if not self._broadcast:
-            return
-        entry = {
-            "id": self._next_transcript_id(),
-            "role": role,
-            "text": text,
-            "type": entry_type,
-        }
+        self._transcript_id += 1
+        entry = {"id": self._transcript_id, "role": role, "text": text, "type": entry_type}
         if tool:
             entry["tool"] = tool
         if tool_args is not None:
             entry["tool_args"] = tool_args
         if tool_result is not None:
             entry["tool_result"] = str(tool_result)[:500]
-        await self._broadcast({"type": "transcript_add", "entry": entry})
+        await self._broadcast_msg({"type": "transcript_add", "entry": entry})
+
+    async def broadcast_welcome(self):
+        if not self._tools:
+            return
+        lines = ["# Minerva\n"]
+        for tool in self._tools.values():
+            base = type(tool).__bases__[0].__name__
+            tag = {"InlineTool": "instant", "AsyncTool": "background", "SessionTool": "session"}.get(base, base)
+            lines.append(f"### {tool.name}")
+            lines.append(f"`{tag}` {tool.description}\n")
+        lines += ["---", "*Say or type anything to get started.*"]
+        await self.broadcast_board_post("minerva", "\n".join(lines))
 
     # ── Tool registration ────────────────────────────────────────────────────
 
     def register(self, tool: BaseTool):
-        """Register a tool with both the TaskManager and the LLM."""
         self._tools[tool.name] = tool
         tool.handle = _OrchestratorToolHandle(self, tool.name)
         self._register_handler(tool.name)
-        logger.info(f"[Orchestrator] Registered tool: {tool.name}")
+        logger.info(f"[Orchestrator] Registered: {tool.name}")
 
     def _register_handler(self, tool_name: str):
-        """Register a Pipecat function handler for a tool name."""
         async def _handler(params: FunctionCallParams):
             result = await self._execute_tool(tool_name, params)
-            await params.result_callback(
-                result.result if result else None,
-            )
-
+            await params.result_callback(result.result if result else None)
         tool = self._tools.get(tool_name)
         cancel = tool.cancel_on_interruption if tool else True
         self.llm.register_function(tool_name, _handler, cancel_on_interruption=cancel)
 
-    # ── Session context management ───────────────────────────────────────────
+    def get_tools_schema(self) -> ToolsSchema | None:
+        schemas = [t.to_function_schema() for t in self._tools.values()]
+        return ToolsSchema(standard_tools=schemas) if schemas else None
 
-    def _find_session_state(self, task_id: str) -> TaskState | None:
-        """Find a TaskState by ID in active tasks or recent history."""
-        state = self.task_manager.active.get(task_id)
-        if state:
-            return state
-        for s in self.task_manager.history:
-            if s.id == task_id:
-                return s
-        return None
+    # ── Session context ──────────────────────────────────────────────────────
 
-    def _find_active_session_for_tool(self, tool_name: str) -> TaskState | None:
-        """Find an active (running) session for a given tool name."""
+    def enter_context(self, task_id: str) -> bool:
+        state = self._find_task(task_id)
+        if not state or not isinstance(state.tool, SessionTool):
+            return False
+        if task_id in self._active_contexts:
+            return True
+        self._active_contexts[task_id] = state
+        self._rebuild_tools()
+        self._on_task_change()
+        logger.info(f"[Orchestrator] Entered context: {task_id} ({state.tool.name})")
+        return True
+
+    def exit_context(self, task_id: str) -> bool:
+        if not self._active_contexts.pop(task_id, None):
+            return False
+        self._rebuild_tools()
+        self._on_task_change()
+        logger.info(f"[Orchestrator] Exited context: {task_id}")
+        return True
+
+    def toggle_context(self, task_id: str) -> bool:
+        if task_id in self._active_contexts:
+            self.exit_context(task_id)
+            return False
+        return self.enter_context(task_id)
+
+    def _rebuild_tools(self):
+        """Rebuild LLMContext.tools = base tools + active context tools."""
+        schemas = [t.to_function_schema() for t in self._tools.values()]
+        self._context_tool_map.clear()
+        for task_id, state in self._active_contexts.items():
+            for schema in state.tool.get_context_tools():
+                schemas.append(schema)
+                self._context_tool_map[schema.name] = task_id
+                if not self.llm.has_function(schema.name):
+                    self._register_context_handler(schema.name)
+        self.context.set_tools(ToolsSchema(standard_tools=schemas))
+        logger.debug(f"[Orchestrator] Tools: {len(schemas)} total, {len(self._context_tool_map)} context")
+
+    def _register_context_handler(self, tool_name: str):
+        async def _handler(params: FunctionCallParams):
+            result = await self._execute_tool(tool_name, params)
+            await params.result_callback(result.result if result else None)
+        self.llm.register_function(tool_name, _handler, cancel_on_interruption=True)
+
+    # ── Tool execution ───────────────────────────────────────────────────────
+
+    async def _execute_tool(self, tool_name: str, params: FunctionCallParams) -> TaskResult:
+        kwargs = dict(params.arguments)
+        await self.broadcast_transcript(
+            "assistant", tool_name, entry_type="tool_call",
+            tool=tool_name, tool_args=kwargs,
+        )
+
+        try:
+            result = await self._dispatch(tool_name, kwargs)
+        except Exception as e:
+            logger.error(f"[Orchestrator] {tool_name} failed: {e}")
+            result = TaskResult(result=f"Error: {e}")
+
+        if result and result.board_content:
+            await self.broadcast_board_post(self._author_for(tool_name), result.board_content)
+
+        await self.broadcast_transcript(
+            "assistant", tool_name, entry_type="tool_result",
+            tool=tool_name, tool_result=result.result if result else None,
+        )
+        return result
+
+    async def _dispatch(self, tool_name: str, kwargs: dict) -> TaskResult:
+        """Route a tool call to the right handler. No error handling — caller wraps."""
+
+        # Context tool (select_option, dismiss, etc.)
+        if tool_name in self._context_tool_map:
+            task_id = self._context_tool_map[tool_name]
+            state = self._active_contexts.get(task_id)
+            if state:
+                return await state.tool.handle_context_call(tool_name, **kwargs)
+
+        tool = self._tools.get(tool_name)
+        if not tool:
+            return TaskResult(result=f"Error: unknown tool {tool_name}")
+
+        # SessionTool — existing session gets on_input, new one spawns
+        if isinstance(tool, SessionTool):
+            active = self._find_active_session(tool_name)
+            if active:
+                return await active.tool.on_input(**kwargs)
+            task_id = await self.task_manager.spawn(tool, kwargs)
+            if tool.auto_enter_context:
+                self.enter_context(task_id)
+            return TaskResult(
+                result=f"Session {task_id} started",
+                guide=f"{tool.name} session is running",
+            )
+
+        # AsyncTool — spawn
+        if isinstance(tool, AsyncTool):
+            task_id = await self.task_manager.spawn(tool, kwargs)
+            return TaskResult(result=f"Task {task_id} started", guide=f"{tool.name} is running")
+
+        # InlineTool — run directly
+        return await tool.run(**kwargs)
+
+    def _author_for(self, tool_name: str) -> str:
+        """Board post author: owning session name for context tools, tool name otherwise."""
+        task_id = self._context_tool_map.get(tool_name)
+        if task_id:
+            state = self._active_contexts.get(task_id)
+            if state:
+                return state.tool.name
+        return tool_name
+
+    # ── Popup actions ────────────────────────────────────────────────────────
+
+    async def handle_popup_action(self, tool_name: str, action: str, data: dict):
+        """Route a popup click to the owning session, then nudge the LLM."""
+        state = self._find_context_by_tool(tool_name)
+        if not state:
+            logger.warning(f"[Orchestrator] No active session for popup: {tool_name}")
+            return
+
+        try:
+            result = await state.tool.handle_context_call(action, **data)
+        except Exception as e:
+            logger.error(f"[Orchestrator] Popup {action} on {tool_name} failed: {e}")
+            return
+
+        if result and result.board_content:
+            await self.broadcast_board_post(tool_name, result.board_content)
+        await self.broadcast_transcript(
+            "user", action, entry_type="popup_action",
+            tool=tool_name, tool_args=data,
+            tool_result=result.result if result else None,
+        )
+
+        # Inject as user text so the LLM processes the selection
+        if result and result.guide and self.pipeline_task:
+            frame = TranscriptionFrame(
+                text=f"[{result.guide}]",
+                user_id="popup",
+                timestamp=str(time.time()),
+            )
+            await self.pipeline_task.queue_frame(frame)
+
+    # ── Pre-turn preparation ─────────────────────────────────────────────────
+
+    def prepare_for_turn(self):
+        """Refresh tools and system message before each LLM turn.
+
+        Called by BoardContextInjector on every LLMRunFrame. Rebuilds tools
+        defensively (Pipecat may reset context.tools between turns) and
+        injects task state + available context tools into the system message.
+        """
+        self._rebuild_tools()
+
+        snapshot = self.task_manager.snapshot()
+
+        # List active context tools so the LLM knows what's available
+        ctx_lines = []
+        for task_id, state in self._active_contexts.items():
+            tool_names = [t.name for t in state.tool.get_context_tools()]
+            ctx_lines.append(f"  {state.tool.name} (session {task_id}): {', '.join(tool_names)}")
+        if ctx_lines:
+            ctx_section = "[Active Session Contexts — use these tools]\n" + "\n".join(ctx_lines)
+            snapshot = f"{snapshot}\n\n{ctx_section}" if snapshot else ctx_section
+
+        content = f"{self._original_system_message}\n\n{snapshot}" if snapshot else self._original_system_message
+        if self.context.messages:
+            self.context.messages[0]["content"] = content
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _find_task(self, task_id: str) -> TaskState | None:
+        return self.task_manager.active.get(task_id) or next(
+            (s for s in self.task_manager.history if s.id == task_id), None
+        )
+
+    def _find_active_session(self, tool_name: str) -> TaskState | None:
         for state in self.task_manager.active.values():
             if isinstance(state.tool, SessionTool) and state.tool.name == tool_name:
                 return state
         return None
 
-    def enter_context(self, task_id: str) -> bool:
-        """Activate a session's context. Returns True if successful."""
-        state = self._find_session_state(task_id)
-        if not state or not isinstance(state.tool, SessionTool):
-            logger.warning(f"[Orchestrator] Cannot enter context: {task_id} is not a session")
-            return False
-
-        if task_id in self._active_contexts:
-            logger.debug(f"[Orchestrator] Context already active for {task_id}")
-            return True
-
-        self._active_contexts[task_id] = state
-        self._rebuild_tools()
-        self._on_task_change()  # update UI with context_active flag
-        logger.info(f"[Orchestrator] Entered context for {task_id} ({state.tool.name})")
-        return True
-
-    def exit_context(self, task_id: str) -> bool:
-        """Deactivate a session's context. Returns True if it was active."""
-        if task_id not in self._active_contexts:
-            return False
-
-        state = self._active_contexts.pop(task_id)
-        self._rebuild_tools()
-        self._on_task_change()
-        logger.info(f"[Orchestrator] Exited context for {task_id} ({state.tool.name})")
-        return True
-
-    def toggle_context(self, task_id: str) -> bool:
-        """Toggle a session's context. Returns True if context is now active."""
-        if task_id in self._active_contexts:
-            self.exit_context(task_id)
-            return False
-        else:
-            return self.enter_context(task_id)
-
-    def _rebuild_tools(self):
-        """Rebuild LLMContext.tools with base tools + active context tools.
-        Pipecat reads context.tools fresh each turn, so no pipeline rebuild needed."""
-        # Base tool schemas
-        schemas = [tool.to_function_schema() for tool in self._tools.values()]
-
-        # Collect context tools from active sessions and build routing map
-        self._context_tool_map.clear()
-        for task_id, state in self._active_contexts.items():
-            session: SessionTool = state.tool
-            for ctx_schema in session.get_context_tools():
-                schemas.append(ctx_schema)
-                self._context_tool_map[ctx_schema.name] = task_id
-                # Register a handler for this context tool if not already registered
-                if not self.llm.has_function(ctx_schema.name):
-                    self._register_context_handler(ctx_schema.name)
-
-        if schemas:
-            self.context.tools = ToolsSchema(standard_tools=schemas)
-        else:
-            self.context.tools = None
-
-        logger.debug(f"[Orchestrator] Rebuilt tools: {len(schemas)} total, "
-                     f"{len(self._context_tool_map)} context tools")
-
-    def _register_context_handler(self, tool_name: str):
-        """Register a Pipecat function handler for a context tool."""
-        async def _handler(params: FunctionCallParams):
-            result = await self._execute_tool(tool_name, params)
-            await params.result_callback(
-                result.result if result else None,
-            )
-
-        self.llm.register_function(tool_name, _handler, cancel_on_interruption=True)
-
-    # ── Popup action routing ─────────────────────────────────────────────────
-
-    async def handle_popup_action(self, tool_name: str, action: str, data: dict):
-        """Handle a direct action from a popup window (user clicked something).
-
-        Finds the active session matching tool_name and routes to handle_context_call.
-        Then injects the result as user text so the LLM can respond.
-        """
-        for task_id, state in self._active_contexts.items():
+    def _find_context_by_tool(self, tool_name: str) -> TaskState | None:
+        for state in self._active_contexts.values():
             if isinstance(state.tool, SessionTool) and state.tool.name == tool_name:
-                try:
-                    result = await state.tool.handle_context_call(action, **data)
-                except Exception as e:
-                    logger.error(f"[Orchestrator] Popup action {action} on {tool_name} failed: {e}")
-                    return
+                return state
+        return None
 
-                if result and result.board_content:
-                    await self.broadcast_board_post(tool_name, result.board_content)
-
-                await self.broadcast_transcript(
-                    "user", action,
-                    entry_type="popup_action", tool=tool_name,
-                    tool_args=data,
-                    tool_result=result.result if result else None,
-                )
-
-                # Inject the result as user text so the LLM sees and responds
-                if result and result.guide and self.pipeline_task:
-                    from pipecat.frames.frames import TranscriptionFrame
-                    frame = TranscriptionFrame(
-                        text=f"[{result.guide}]",
-                        user_id="popup",
-                        timestamp=str(time.time()),
-                    )
-                    await self.pipeline_task.queue_frame(frame)
-
-                return
-
-        logger.warning(f"[Orchestrator] No active session for popup action: {tool_name}")
-
-    # ── Tool execution ───────────────────────────────────────────────────────
-
-    async def _execute_tool(self, tool_name: str, params: FunctionCallParams) -> TaskResult:
-        """Execute a tool, routing by type and context."""
-        kwargs = dict(params.arguments)
-
-        # Broadcast tool call to transcript
-        await self.broadcast_transcript(
-            "assistant", tool_name,
-            entry_type="tool_call", tool=tool_name,
-            tool_args=kwargs,
-        )
-
-        # 1. Check if this is a context tool call
-        if tool_name in self._context_tool_map:
-            task_id = self._context_tool_map[tool_name]
-            state = self._active_contexts.get(task_id)
-            if state and isinstance(state.tool, SessionTool):
-                try:
-                    result = await state.tool.handle_context_call(tool_name, **kwargs)
-                except Exception as e:
-                    logger.error(f"[Orchestrator] Context tool {tool_name} failed: {e}")
-                    result = TaskResult(result=f"Error: {e}")
-
-                if result and result.board_content:
-                    await self.broadcast_board_post(state.tool.name, result.board_content)
-
-                await self.broadcast_transcript(
-                    "assistant", tool_name,
-                    entry_type="tool_result", tool=tool_name,
-                    tool_result=result.result if result else None,
-                )
-                return result
-
-        # 2. Look up the registered tool
-        tool = self._tools.get(tool_name)
-        if not tool:
-            logger.error(f"[Orchestrator] Unknown tool: {tool_name}")
-            result = TaskResult(result=f"Error: unknown tool {tool_name}")
-            await self.broadcast_transcript(
-                "assistant", tool_name,
-                entry_type="tool_result", tool=tool_name,
-                tool_result=result.result,
-            )
-            return result
-
-        # 3. SessionTool: check for active session → route to on_input()
-        if isinstance(tool, SessionTool):
-            active_state = self._find_active_session_for_tool(tool_name)
-            if active_state:
-                # Session already running — route to on_input()
-                try:
-                    result = await active_state.tool.on_input(**kwargs)
-                except Exception as e:
-                    logger.error(f"[Orchestrator] {tool.name}.on_input() failed: {e}")
-                    result = TaskResult(result=f"Error: {e}")
-
-                if result and result.board_content:
-                    await self.broadcast_board_post(tool.name, result.board_content)
-
-                await self.broadcast_transcript(
-                    "assistant", tool_name,
-                    entry_type="tool_result", tool=tool_name,
-                    tool_result=result.result if result else None,
-                )
-                return result
-
-            # New session — spawn it
-            task_id = await self.task_manager.spawn(tool, kwargs)
-
-            # Auto-enter context if the session wants it
-            if tool.auto_enter_context:
-                self.enter_context(task_id)
-
-            result = TaskResult(
-                result=f"Session {task_id} started",
-                guide=f"{tool.name} session is running",
-            )
-
-        elif isinstance(tool, AsyncTool):
-            task_id = await self.task_manager.spawn(tool, kwargs)
-            result = TaskResult(
-                result=f"Task {task_id} started",
-                guide=f"{tool.name} is running",
-            )
-        else:
-            # InlineTool — run directly
-            try:
-                result = await tool.run(**kwargs)
-                if result and result.board_content:
-                    await self.broadcast_board_post(tool.name, result.board_content)
-            except Exception as e:
-                logger.error(f"[Orchestrator] {tool.name} failed: {e}")
-                result = TaskResult(result=f"Error: {e}")
-
-        # Broadcast tool result
-        await self.broadcast_transcript(
-            "assistant", tool_name,
-            entry_type="tool_result", tool=tool_name,
-            tool_result=result.result if result else None,
-        )
-
-        return result
-
-    # ── Notification / broadcast callbacks ───────────────────────────────────
+    # ── TaskManager callbacks ────────────────────────────────────────────────
 
     def _on_notification(self, notif: Notification):
-        """Deliver a notification to the user via TTS."""
         logger.info(f"[Orchestrator] Notification: {notif.message}")
-        frame = TTSSpeakFrame(text=notif.message)
-        self.pipeline_task.queue_frame(frame)
+        asyncio.create_task(self.pipeline_task.queue_frame(TTSSpeakFrame(text=notif.message)))
 
     def _on_task_finalize(self, task_id: str):
-        """Called when a task is finalized. Clean up context if it was a session."""
         if task_id in self._active_contexts:
             self.exit_context(task_id)
 
     def _on_board_post(self, task_id: str, author: str, content: str):
-        """Called when an async task posts to the board."""
-        if self._broadcast:
-            async def _post():
-                index = await self.broadcast_board_post(author, content)
-                state = self.task_manager.active.get(task_id) or next(
-                    (s for s in self.task_manager.history if s.id == task_id), None
-                )
-                if state:
-                    state.board_post_index = index
-                    self.task_manager._notify_change()
-            asyncio.create_task(_post())
+        if not self._broadcast:
+            return
+        async def _post():
+            index = await self.broadcast_board_post(author, content)
+            state = self._find_task(task_id)
+            if state:
+                state.board_post_index = index
+                self.task_manager._notify_change()
+        asyncio.create_task(_post())
 
     def _on_task_change(self):
-        """Called when any task state changes. Broadcasts to UI."""
         if not self._broadcast:
             return
         tasks = self.task_manager.to_ui_list()
-        # Augment with context info
-        active_context_ids = set(self._active_contexts.keys())
+        active_ids = set(self._active_contexts)
         for t in tasks:
-            state = self._find_session_state(t["id"])
+            state = self._find_task(t["id"])
             t["is_session"] = isinstance(state.tool, SessionTool) if state else False
-            t["context_active"] = t["id"] in active_context_ids
+            t["context_active"] = t["id"] in active_ids
         asyncio.create_task(self._broadcast({"type": "task_update", "tasks": tasks}))
-
-    # ── Context injection ────────────────────────────────────────────────────
-
-    def inject_task_context(self):
-        """Update the system message with current task state.
-
-        Call this before each LLM turn to give the agent awareness of
-        active/completed tasks. Modifies the first system message in-place.
-        """
-        snapshot = self.task_manager.snapshot()
-
-        # Add active context info
-        context_lines = []
-        for task_id, state in self._active_contexts.items():
-            context_lines.append(f"  Active context: {state.tool.name} (session {task_id})")
-
-        if context_lines:
-            context_section = "[Active Session Contexts]\n" + "\n".join(context_lines)
-            if snapshot:
-                snapshot = snapshot + "\n\n" + context_section
-            else:
-                snapshot = context_section
-
-        if snapshot:
-            updated = f"{self._original_system_message}\n\n{snapshot}"
-        else:
-            updated = self._original_system_message
-
-        if self.context.messages:
-            self.context.messages[0]["content"] = updated
-
-    def get_tools_schema(self):
-        """Get a ToolsSchema containing all registered tools, for passing to LLMContext."""
-        schemas = [tool.to_function_schema() for tool in self._tools.values()]
-        if schemas:
-            return ToolsSchema(standard_tools=schemas)
-        return None

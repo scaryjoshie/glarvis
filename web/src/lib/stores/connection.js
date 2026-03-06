@@ -30,14 +30,18 @@ export async function openPopup(popupType, toolName, data) {
   const url = `popup.html#${dataStr}`;
   const label = `popup_${toolName}`;
 
+  // Scale height to content: ~50px per option + 120px for prompt/buttons/padding
+  const optionCount = data?.options?.length || 3;
+  const height = Math.min(Math.max(optionCount * 50 + 120, 200), 600);
+
   console.log('[Popup] Opening Tauri window:', popupType, toolName);
   const overlay = new WebviewWindow(label, {
     url,
     title: 'Minerva',
     width: 420,
-    height: 360,
+    height,
     decorations: false,
-    transparent: false,
+    transparent: true,
     alwaysOnTop: true,
     center: true,
     resizable: false,
