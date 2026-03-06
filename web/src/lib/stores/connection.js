@@ -1,4 +1,6 @@
 import { writable } from 'svelte/store';
+import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { listen } from '@tauri-apps/api/event';
 
 export const connectionState = writable('disconnected'); // disconnected | connecting | connected
 export const agentState = writable('idle'); // idle | listening | thinking | speaking
@@ -10,61 +12,47 @@ export const transcript = writable([]);
 export const boardStream = writable([]);    // array of {author, content, timestamp}
 export const boardFocused = writable(null);  // currently focused item index
 
-export const pendingPopupStore = writable(null); // {popupType, toolName, data, url} when blocked
-
 let ws = null;
-let pendingPopup = null;
 
-// ── Popup management ─────────────────────────────────────────────────────────
+// ── Popup management (Tauri native windows) ──────────────────────────────────
 
-const openPopups = new Map(); // tool_name → Window
+const openPopups = new Map(); // tool_name → WebviewWindow
 
-// Listen for postMessage from popup windows
-window.addEventListener('message', (event) => {
-  if (event.data?.type === 'popup_action') {
-    sendPopupAction(event.data.tool_name, event.data.action, event.data.data || {});
-  }
+// Listen for popup actions from overlay windows via Tauri events
+listen('popup-action', (event) => {
+  const { tool_name, action, data } = event.payload;
+  sendPopupAction(tool_name, action, data || {});
 });
 
-export function openPopup(popupType, toolName, data) {
-  closePopup(toolName);
+export async function openPopup(popupType, toolName, data) {
+  await closePopup(toolName);
   const dataStr = encodeURIComponent(JSON.stringify({ popupType, toolName, data }));
-  const url = `/popup.html#${dataStr}`;
-  console.log('[Popup] Opening:', popupType, toolName, url);
-  const win = window.open(url, `popup_${toolName}`, 'width=420,height=360,menubar=no,toolbar=no,status=no');
-  if (win) {
-    console.log('[Popup] Window opened successfully');
-    openPopups.set(toolName, win);
-  } else {
-    console.warn('[Popup] window.open() returned null — likely blocked by browser popup blocker');
-    // Queue for user-gesture-triggered open
-    pendingPopup = { popupType, toolName, data, url };
-    pendingPopupStore.set(pendingPopup);
-  }
+  const url = `popup.html#${dataStr}`;
+  const label = `popup_${toolName}`;
+
+  console.log('[Popup] Opening Tauri window:', popupType, toolName);
+  const overlay = new WebviewWindow(label, {
+    url,
+    title: '',
+    width: 420,
+    height: 360,
+    decorations: false,
+    transparent: true,
+    alwaysOnTop: true,
+    center: true,
+    resizable: false,
+    skipTaskbar: true,
+  });
+
+  openPopups.set(toolName, overlay);
 }
 
-/** Call from a click handler to retry a blocked popup. */
-export function openPendingPopup() {
-  if (!pendingPopup) return;
-  const { url, toolName } = pendingPopup;
-  const win = window.open(url, `popup_${toolName}`, 'width=420,height=360,menubar=no,toolbar=no,status=no');
-  if (win) {
-    console.log('[Popup] Opened via user gesture');
-    openPopups.set(toolName, win);
-  }
-  pendingPopup = null;
-  pendingPopupStore.set(null);
-}
-
-export function closePopup(toolName) {
+export async function closePopup(toolName) {
   const win = openPopups.get(toolName);
-  if (win && !win.closed) win.close();
-  openPopups.delete(toolName);
-  // Clear pending popup if it matches
-  if (pendingPopup?.toolName === toolName) {
-    pendingPopup = null;
-    pendingPopupStore.set(null);
+  if (win) {
+    try { await win.close(); } catch {}
   }
+  openPopups.delete(toolName);
 }
 
 function sendPopupAction(toolName, action, data) {

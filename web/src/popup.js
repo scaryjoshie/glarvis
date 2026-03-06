@@ -1,6 +1,6 @@
 /**
- * Popup entry point. Reads popup type + data from URL hash,
- * mounts the appropriate Svelte component.
+ * Popup entry point (Tauri overlay window).
+ * Reads popup type + data from URL hash, mounts the appropriate Svelte component.
  */
 import './app.css';
 import MultiChoice from './lib/popups/MultiChoice.svelte';
@@ -22,5 +22,4 @@ try {
   }
 } catch (e) {
   console.error('[Popup] Failed to initialize:', e);
-  document.getElementById('popup').textContent = 'Failed to load popup.';
 }

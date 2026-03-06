@@ -1,19 +1,19 @@
 <script>
+  import { emit } from '@tauri-apps/api/event';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+
   export let prompt = '';
   export let options = [];
   export let toolName = '';
 
   let actionSent = false;
 
-  function send(action, data = {}) {
+  async function send(action, data = {}) {
     if (actionSent) return;
     actionSent = true;
-    window.opener?.postMessage({
-      type: 'popup_action',
-      tool_name: toolName,
-      action,
-      data,
-    }, '*');
+    await emit('popup-action', { tool_name: toolName, action, data });
+    // Close self after sending
+    try { await getCurrentWindow().close(); } catch {}
   }
 
   function select(index) {
@@ -23,44 +23,57 @@
   function dismiss() {
     send('dismiss');
   }
-
-  // If user closes the window without picking, dismiss
-  window.addEventListener('beforeunload', () => {
-    if (!actionSent) {
-      send('dismiss');
-    }
-  });
 </script>
 
-<div class="multi-choice">
-  {#if prompt}
-    <p class="prompt">{prompt}</p>
-  {/if}
-  <div class="options">
-    {#each options as option, i}
-      <button class="option" on:click={() => select(i)}>
-        <span class="number">{i + 1}</span>
-        <span class="label">{option}</span>
-      </button>
-    {/each}
+<div class="overlay">
+  <div class="card">
+    {#if prompt}
+      <p class="prompt">{prompt}</p>
+    {/if}
+    <div class="options">
+      {#each options as option, i}
+        <button class="option" on:click={() => select(i)}>
+          <span class="number">{i + 1}</span>
+          <span class="label">{option}</span>
+        </button>
+      {/each}
+    </div>
+    <button class="dismiss-btn" on:click={dismiss}>Dismiss</button>
   </div>
-  <button class="dismiss-btn" on:click={dismiss}>Dismiss</button>
 </div>
 
 <style>
-  .multi-choice {
-    padding: 16px;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    color: var(--color-text, #e4e4e7);
-    background: var(--color-bg, #18181b);
+  :global(html), :global(body) {
+    background: transparent !important;
+    margin: 0;
+    padding: 0;
+  }
+
+  .overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     min-height: 100vh;
+    padding: 24px;
     box-sizing: border-box;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  .card {
+    background: rgba(24, 24, 27, 0.92);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(63, 63, 70, 0.6);
+    border-radius: 14px;
+    padding: 20px;
+    width: 100%;
+    max-width: 360px;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
   }
 
   .prompt {
     font-size: 14px;
-    margin: 0 0 12px;
-    color: var(--color-muted, #a1a1aa);
+    margin: 0 0 14px;
+    color: #a1a1aa;
   }
 
   .options {
@@ -74,10 +87,10 @@
     align-items: center;
     gap: 10px;
     padding: 10px 14px;
-    border: 1px solid var(--color-border, #27272a);
-    border-radius: 8px;
-    background: var(--color-surface, #1f1f23);
-    color: inherit;
+    border: 1px solid rgba(63, 63, 70, 0.5);
+    border-radius: 10px;
+    background: rgba(39, 39, 42, 0.5);
+    color: #e4e4e7;
     font-size: 13px;
     cursor: pointer;
     transition: border-color 0.15s, background 0.15s;
@@ -86,21 +99,27 @@
   }
 
   .option:hover {
-    border-color: var(--color-blue, #3b82f6);
-    background: var(--color-surface-hover, #27272a);
+    border-color: #3b82f6;
+    background: rgba(59, 130, 246, 0.1);
   }
 
   .number {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 22px;
-    height: 22px;
+    width: 24px;
+    height: 24px;
     border-radius: 50%;
-    background: var(--color-border, #27272a);
+    background: rgba(63, 63, 70, 0.6);
     font-size: 11px;
     font-weight: 600;
     flex-shrink: 0;
+    color: #a1a1aa;
+  }
+
+  .option:hover .number {
+    background: rgba(59, 130, 246, 0.2);
+    color: #3b82f6;
   }
 
   .label {
@@ -110,17 +129,18 @@
   .dismiss-btn {
     margin-top: 12px;
     padding: 6px 16px;
-    border: 1px solid var(--color-border, #27272a);
-    border-radius: 6px;
+    border: 1px solid rgba(63, 63, 70, 0.4);
+    border-radius: 8px;
     background: none;
-    color: var(--color-muted, #a1a1aa);
+    color: #71717a;
     font-size: 12px;
     cursor: pointer;
     font-family: inherit;
+    transition: color 0.15s, border-color 0.15s;
   }
 
   .dismiss-btn:hover {
-    color: var(--color-text, #e4e4e7);
-    border-color: var(--color-muted, #a1a1aa);
+    color: #e4e4e7;
+    border-color: #71717a;
   }
 </style>
