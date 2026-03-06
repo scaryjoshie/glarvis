@@ -2,22 +2,6 @@
 
 ## Next Up (build order)
 
-### 1. Session context system
-- `SessionTool.get_context_tools()` — returns temporary tool schemas
-- `SessionTool.handle_context_call()` — dispatches context tool calls
-- Dynamic `LLMContext.tools` update in orchestrator (add/remove context tools)
-- `enter_session(id)` / `exit_session(id)` built-in tools
-- Task chip click → enter/exit active context
-- Session states: dormant / active context / closed
-- Wire up `on_input()` routing in orchestrator (currently TODO)
-- See `docs/tool-context-and-popups.md` for full design
-
-### 2. ToolHandle
-- Scoped API given to tools at registration
-- Methods: `open_popup()`, `close_popup()`, `post_to_board()`
-- Set on `BaseTool.handle` by orchestrator
-- Decouples tools from orchestrator internals
-
 ### 3. Popup infrastructure
 - WebSocket message types: `popup_open`, `popup_close`, `popup_action`
 - `window.open()` wrapper in frontend
@@ -61,15 +45,17 @@
 
 ## Done
 
+- Session context system (get_context_tools, handle_context_call, dynamic LLMContext.tools, enter/exit_session tools, chip click → context toggle, on_input routing, auto-enter/exit context)
+- ToolHandle (scoped API: post_to_board, open_popup, close_popup — subclass pattern with _OrchestratorToolHandle)
 - Tool type system (BaseTool ABC → InlineTool/AsyncTool/SessionTool)
 - Orchestrator routes by isinstance() check
 - TaskResult with result/guide/board_content
 - Board stream (array of posts with sidebar, hover preview)
-- TaskDisplay (horizontal scrolling chips, board linking, clear button)
+- TaskDisplay (horizontal scrolling chips, board linking, clear button, session context toggle with purple highlight)
 - `persist_in_display` (AsyncTool=False, SessionTool=True)
 - Text input alongside voice (TranscriptionFrame injection)
 - Discord-style voice controls (mute, deafen, connect/disconnect, quick tools)
-- WriteBoard, ListTools, DebugContext tools
+- WriteBoard, ListTools, DebugContext, EnterSession, ExitSession tools
 - Tool call args + results in transcript
 - Welcome board post on connect
 - Session state clear on connect/disconnect
