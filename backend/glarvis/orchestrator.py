@@ -8,7 +8,9 @@ Responsibilities:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import asyncio
+import time
+from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from loguru import logger
 
@@ -17,7 +19,7 @@ from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams, FunctionCallResultProperties
 
 from glarvis.task_manager import TaskManager, Notification
-from glarvis.tool import Tool, TaskResult
+from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult
 
 if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
@@ -50,15 +52,40 @@ class Orchestrator:
         self.llm = llm
         self.context = context
         self.pipeline_task = pipeline_task
-        self._tools: dict[str, Tool] = {}
+        self._tools: dict[str, BaseTool] = {}
+        self._broadcast: Callable[[dict], Coroutine] | None = None
+        self._transcript_id = 0
 
         # Wire up notification delivery
         self.task_manager.on_notification = self._on_notification
+        self.task_manager.on_change = self._on_task_change
 
         # Inject task state before each LLM turn by patching context
         self._original_system_message = context.messages[0]["content"] if context.messages else ""
 
-    def register(self, tool: Tool):
+    def set_broadcast(self, broadcast_fn: Callable[[dict], Coroutine]):
+        """Set the broadcast function for sending UI updates."""
+        self._broadcast = broadcast_fn
+
+    def _next_transcript_id(self) -> int:
+        self._transcript_id += 1
+        return self._transcript_id
+
+    async def broadcast_transcript(self, role: str, text: str, entry_type: str = "speech", tool: str | None = None):
+        """Send a transcript entry to the UI."""
+        if not self._broadcast:
+            return
+        entry = {
+            "id": self._next_transcript_id(),
+            "role": role,
+            "text": text,
+            "type": entry_type,
+        }
+        if tool:
+            entry["tool"] = tool
+        await self._broadcast({"type": "transcript_add", "entry": entry})
+
+    def register(self, tool: BaseTool):
         """Register a tool with both the TaskManager and the LLM."""
         self._tools[tool.name] = tool
 
@@ -69,7 +96,7 @@ class Orchestrator:
             # Always pass results back to the LLM context so it remembers them.
             # run_llm controls whether the LLM generates a spoken response about it.
             await params.result_callback(
-                result.value if result else None,
+                result.result if result else None,
             )
 
         self.llm.register_function(
@@ -80,28 +107,35 @@ class Orchestrator:
 
         logger.info(f"[Orchestrator] Registered tool: {tool.name}")
 
-    async def _execute_tool(self, tool: Tool, params: FunctionCallParams) -> TaskResult:
-        """Execute a tool, routing through the TaskManager for lifecycle management."""
+    async def _execute_tool(self, tool: BaseTool, params: FunctionCallParams) -> TaskResult:
+        """Execute a tool, routing by type: isinstance check, not metadata."""
         kwargs = dict(params.arguments)
 
-        if tool.ttl or tool.notification != "silent":
-            # Async/background tool — spawn on the TaskManager
+        # Broadcast tool call to transcript
+        await self.broadcast_transcript("assistant", tool.name, entry_type="tool_call", tool=tool.name)
+
+        if isinstance(tool, SessionTool):
+            # TODO: check for active session and route to on_input()
             task_id = await self.task_manager.spawn(tool, kwargs)
-            # Return a placeholder; the TaskManager handles completion
             return TaskResult(
-                value=f"Task {task_id} started",
-                display_text=f"{tool.name} is running",
+                result=f"Task {task_id} started",
+                guide=f"{tool.name} session is running",
+            )
+        elif isinstance(tool, AsyncTool):
+            # Background tool — spawn on the TaskManager
+            task_id = await self.task_manager.spawn(tool, kwargs)
+            return TaskResult(
+                result=f"Task {task_id} started",
+                guide=f"{tool.name} is running",
             )
         else:
-            # Simple synchronous tool — run inline
+            # InlineTool — run directly, return result
             try:
-                await tool.on_start()
                 result = await tool.run(**kwargs)
-                await tool.on_complete(result)
                 return result
             except Exception as e:
                 logger.error(f"[Orchestrator] {tool.name} failed: {e}")
-                return TaskResult(value=f"Error: {e}")
+                return TaskResult(result=f"Error: {e}")
 
     def _on_notification(self, notif: Notification):
         """Deliver a notification to the user via TTS."""
@@ -110,6 +144,13 @@ class Orchestrator:
         frame = TTSSpeakFrame(text=notif.message)
         # Use queue_frame on the pipeline task to inject into the pipeline
         self.pipeline_task.queue_frame(frame)
+
+    def _on_task_change(self):
+        """Called when any task state changes. Broadcasts to UI."""
+        if not self._broadcast:
+            return
+        tasks = self.task_manager.to_ui_list()
+        asyncio.create_task(self._broadcast({"type": "task_update", "tasks": tasks}))
 
     def inject_task_context(self):
         """Update the system message with current task state.

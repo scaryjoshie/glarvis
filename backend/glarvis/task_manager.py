@@ -14,7 +14,7 @@ from typing import Any, Callable, Literal
 
 from loguru import logger
 
-from glarvis.tool import DisplayMode, Tool, NotificationLevel, TaskResult
+from glarvis.tool import AsyncTool, NotificationLevel, TaskResult
 
 
 @dataclass
@@ -22,7 +22,7 @@ class TaskState:
     """Tracks a single running or completed task."""
 
     id: str
-    tool: Tool
+    tool: AsyncTool
     status: Literal["pending", "running", "completed", "failed", "expired"] = "pending"
     started_at: float = field(default_factory=time.time)
     completed_at: float | None = None
@@ -63,14 +63,15 @@ class TaskManager:
         self.pending_notifications: list[Notification] = []
         self._counter = 0
 
-        # Callback for delivering notifications (set by orchestrator)
+        # Callbacks (set by orchestrator)
         self.on_notification: Callable[[Notification], Any] | None = None
+        self.on_change: Callable[[], Any] | None = None
 
     def _next_id(self) -> str:
         self._counter += 1
         return f"task_{self._counter}"
 
-    async def spawn(self, tool: Tool, kwargs: dict[str, Any]) -> str:
+    async def spawn(self, tool: AsyncTool, kwargs: dict[str, Any]) -> str:
         """Spawn a tool as an async task, tracked by the task manager."""
         task_id = self._next_id()
         state = TaskState(id=task_id, tool=tool, status="running")
@@ -102,18 +103,25 @@ class TaskManager:
             except Exception as e:
                 state.status = "failed"
                 state.completed_at = time.time()
-                state.result = TaskResult(value=None, display_text=f"Error: {e}")
+                state.result = TaskResult(result=None, guide=f"Error: {e}")
                 logger.error(f"[TaskManager] {task_id} ({tool.name}) failed: {e}")
                 self._finalize(task_id)
 
         state._task = asyncio.create_task(_run())
+        self._notify_change()
         return task_id
+
+    def _notify_change(self):
+        """Notify listeners that task state changed."""
+        if self.on_change:
+            self.on_change()
 
     def post_progress(self, task_id: str, update: str):
         """Called by tools to report progress."""
         if task_id in self.active:
             self.active[task_id].progress = update
             logger.debug(f"[TaskManager] {task_id} progress: {update}")
+            self._notify_change()
 
     def _handle_completion(self, task_id: str, state: TaskState):
         """Route completion based on tool metadata."""
@@ -121,18 +129,18 @@ class TaskManager:
         result = state.result
 
         # Display routing
-        if tool.display in ("board", "both") and result and result.display_text:
-            logger.info(f"[TaskManager] {tool.name}: {result.display_text}")
+        if tool.display in ("board", "both") and result and result.board_content:
+            logger.info(f"[TaskManager] {tool.name}: {result.board_content}")
             # TODO: when we have a UI, send to Board display panel
-            print(f"\n[{tool.name}] {result.display_text}")
+            print(f"\n[{tool.name}] {result.board_content}")
 
         # Notification routing
         if tool.notification == "silent":
             pass
         elif tool.notification in ("notify", "interrupt"):
             msg = (
-                result.speak_text
-                if result and result.speak_text
+                result.guide
+                if result and result.guide
                 else f"{tool.name} has completed"
             )
             notif = Notification(task_id=task_id, message=msg, level=tool.notification)
@@ -147,6 +155,7 @@ class TaskManager:
         if task_id in self.active:
             state = self.active.pop(task_id)
             self.history.append(state)
+            self._notify_change()
 
     def drain_notifications(self) -> list[Notification]:
         """Pop all pending notifications. Called by orchestrator before LLM turn."""
@@ -162,17 +171,17 @@ class TaskManager:
 
         for state in self.active.values():
             elapsed = time.time() - state.started_at
-            status = state.tool.board_status(elapsed)
+            status = state.tool.task_display_status(elapsed)
             if state.progress:
                 status += f' -- "{state.progress}"'
             lines.append(f"  Running: {status}")
 
         # Show recent completions that might be relevant
         for state in list(self.history)[-5:]:
-            if state.status == "completed" and state.result and state.result.display_text:
-                lines.append(f"  Completed: {state.tool.name} -- {state.result.display_text}")
-            elif state.status == "failed" and state.result and state.result.display_text:
-                lines.append(f"  Failed: {state.tool.name} -- {state.result.display_text}")
+            if state.status == "completed" and state.result and state.result.guide:
+                lines.append(f"  Completed: {state.tool.name} -- {state.result.guide}")
+            elif state.status == "failed" and state.result and state.result.guide:
+                lines.append(f"  Failed: {state.tool.name} -- {state.result.guide}")
 
         # Pending notifications the agent should be aware of
         for notif in self.pending_notifications:
@@ -182,3 +191,30 @@ class TaskManager:
             return None
 
         return "[Task State]\n" + "\n".join(lines)
+
+    def to_ui_list(self) -> list[dict]:
+        """Serialize task state for the frontend UI."""
+        now = time.time()
+        items = []
+
+        for state in self.active.values():
+            items.append({
+                "id": state.id,
+                "name": state.tool.name,
+                "status": state.status,
+                "elapsed": now - state.started_at,
+                "progress": state.progress,
+            })
+
+        # Include recent history
+        for state in list(self.history)[-5:]:
+            elapsed = (state.completed_at or now) - state.started_at
+            items.append({
+                "id": state.id,
+                "name": state.tool.name,
+                "status": state.status,
+                "elapsed": elapsed,
+                "progress": state.result.guide if state.result else None,
+            })
+
+        return items

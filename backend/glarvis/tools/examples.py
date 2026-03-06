@@ -1,31 +1,26 @@
-"""Example tools to demonstrate the Tool pattern."""
+"""Example tools to demonstrate the tool type system."""
 
 import asyncio
 import os
 
-from glarvis.tool import Tool, TaskResult
+from glarvis.tool import AsyncTool, InlineTool, TaskResult
 
 
-class GetTime(Tool):
-    """Simple synchronous tool — returns immediately, agent speaks the answer."""
+class GetTime(InlineTool):
+    """Returns the current time. Runs inline, agent speaks the answer."""
 
     name = "get_time"
     description = "Get the current date and time."
-    parameters = {}
-    required = []
-
-    notification = "silent"
-    display = "none"
 
     async def run(self, **kwargs) -> TaskResult:
         from datetime import datetime
 
         now = datetime.now().strftime("%I:%M %p on %A, %B %d")
-        return TaskResult(value=now)
+        return TaskResult(result=now, guide=f"It's {now}")
 
 
-class SearchFiles(Tool):
-    """Background tool — runs async, posts results to the board."""
+class SearchFiles(AsyncTool):
+    """Searches files by pattern. Runs async, posts results to the board."""
 
     name = "search_files"
     description = (
@@ -36,29 +31,25 @@ class SearchFiles(Tool):
         "pattern": {"type": "string", "description": "Filename pattern to search for (e.g. '*.py', 'auth')"}
     }
     required = ["pattern"]
-
-    notification = "notify"
-    display = "board"
     ttl = 15
 
     async def run(self, pattern: str = "", **kwargs) -> TaskResult:
         import glob
 
         matches = glob.glob(f"**/*{pattern}*", recursive=True)
-        # Simulate some work for demo purposes
         await asyncio.sleep(1)
         return TaskResult(
-            value=matches,
-            display_text="\n".join(matches[:20]) if matches else "No files found",
-            speak_text=f"Found {len(matches)} files matching {pattern}",
+            result=matches,
+            guide=f"Found {len(matches)} files matching {pattern}",
+            board_content="\n".join(matches[:20]) if matches else "No files found",
         )
 
-    def board_status(self, elapsed: float) -> str:
+    def task_display_status(self, elapsed: float) -> str:
         return f"search_files (searching, {elapsed:.1f}s)"
 
 
-class ListDirectory(Tool):
-    """Quick tool — lists files in a directory, displays on board."""
+class ListDirectory(InlineTool):
+    """Lists files in a directory. Runs inline, posts to board."""
 
     name = "list_directory"
     description = (
@@ -68,9 +59,6 @@ class ListDirectory(Tool):
     parameters = {
         "path": {"type": "string", "description": "Directory path to list (default: current directory)"}
     }
-    required = []
-
-    notification = "silent"
     display = "board"
 
     async def run(self, path: str = ".", **kwargs) -> TaskResult:
@@ -78,8 +66,9 @@ class ListDirectory(Tool):
             entries = os.listdir(path)
             listing = "\n".join(sorted(entries))
             return TaskResult(
-                value=entries,
-                display_text=listing,
+                result=entries,
+                guide=f"Listed {len(entries)} items in {path}",
+                board_content=listing,
             )
         except OSError as e:
-            return TaskResult(value=None, display_text=f"Error: {e}")
+            return TaskResult(result=None, guide=f"Error listing directory: {e}")
