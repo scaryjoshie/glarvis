@@ -1,9 +1,15 @@
 """Example tools to demonstrate the tool type system."""
 
+from __future__ import annotations
+
 import asyncio
 import os
+from typing import TYPE_CHECKING
 
 from glarvis.tool import AsyncTool, InlineTool, TaskResult
+
+if TYPE_CHECKING:
+    from glarvis.orchestrator import Orchestrator
 
 
 class GetTime(InlineTool):
@@ -72,3 +78,33 @@ class ListDirectory(InlineTool):
             )
         except OSError as e:
             return TaskResult(result=None, guide=f"Error listing directory: {e}")
+
+
+class ListTools(InlineTool):
+    """Lists all available tools on the board."""
+
+    name = "list_tools"
+    description = "Show all available tools and what they do. Posts the list to the board."
+    display = "board"
+
+    def __init__(self, orchestrator: Orchestrator):
+        self._orchestrator = orchestrator
+
+    async def run(self, **kwargs) -> TaskResult:
+        tools = self._orchestrator._tools
+        if not tools:
+            return TaskResult(result="No tools registered", guide="No tools available")
+
+        lines = ["## Available Tools\n"]
+        for tool in tools.values():
+            tool_type = type(tool).__bases__[0].__name__
+            lines.append(f"**{tool.name}** ({tool_type})")
+            lines.append(f"> {tool.description}\n")
+
+        md = "\n".join(lines)
+        names = ", ".join(tools.keys())
+        return TaskResult(
+            result=names,
+            guide=f"I have {len(tools)} tools: {names}",
+            board_content=md,
+        )

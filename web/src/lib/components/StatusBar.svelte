@@ -1,6 +1,6 @@
 <script>
-  import { connectionState, agentState } from '../stores/connection.js';
-  import { connectWebSocket, connectWebRTC, disconnect } from '../stores/connection.js';
+  import { connectionState, agentState, muted } from '../stores/connection.js';
+  import { connectWebSocket, connectWebRTC, disconnect, toggleMute } from '../stores/connection.js';
 
   function handleConnect() {
     connectWebSocket();
@@ -25,6 +25,9 @@
 <div class="status-bar">
   <div class="left">
     {#if $connectionState === 'connected'}
+      <button class="mute-btn" class:muted={$muted} on:click={toggleMute}>
+        {$muted ? 'Unmute' : 'Mute'}
+      </button>
       <span class="indicator" style="background: {stateColor}"></span>
       <span class="state-label">{stateLabel}</span>
     {:else if $connectionState === 'connecting'}
@@ -112,6 +115,25 @@
   }
 
   .disconnect-btn:hover {
+    border-color: var(--color-red);
+    color: var(--color-red);
+  }
+
+  .mute-btn {
+    background: none;
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    padding: 2px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .mute-btn:hover {
+    border-color: var(--color-muted);
+  }
+
+  .mute-btn.muted {
     border-color: var(--color-red);
     color: var(--color-red);
   }

@@ -59,6 +59,7 @@ class Orchestrator:
         # Wire up notification delivery
         self.task_manager.on_notification = self._on_notification
         self.task_manager.on_change = self._on_task_change
+        self.task_manager.on_board_post = self._on_board_post
 
         # Inject task state before each LLM turn by patching context
         self._original_system_message = context.messages[0]["content"] if context.messages else ""
@@ -70,6 +71,17 @@ class Orchestrator:
     def _next_transcript_id(self) -> int:
         self._transcript_id += 1
         return self._transcript_id
+
+    async def broadcast_board_post(self, author: str, content: str):
+        """Send a board post to the UI."""
+        if not self._broadcast:
+            return
+        await self._broadcast({
+            "type": "board_post",
+            "author": author,
+            "content": content,
+            "timestamp": time.time(),
+        })
 
     async def broadcast_transcript(self, role: str, text: str, entry_type: str = "speech", tool: str | None = None):
         """Send a transcript entry to the UI."""
@@ -132,6 +144,8 @@ class Orchestrator:
             # InlineTool — run directly, return result
             try:
                 result = await tool.run(**kwargs)
+                if result and result.board_content:
+                    await self.broadcast_board_post(tool.name, result.board_content)
                 return result
             except Exception as e:
                 logger.error(f"[Orchestrator] {tool.name} failed: {e}")
@@ -144,6 +158,11 @@ class Orchestrator:
         frame = TTSSpeakFrame(text=notif.message)
         # Use queue_frame on the pipeline task to inject into the pipeline
         self.pipeline_task.queue_frame(frame)
+
+    def _on_board_post(self, author: str, content: str):
+        """Called when an async task posts to the board."""
+        if self._broadcast:
+            asyncio.create_task(self.broadcast_board_post(author, content))
 
     def _on_task_change(self):
         """Called when any task state changes. Broadcasts to UI."""

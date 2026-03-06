@@ -5,9 +5,9 @@ export default defineConfig({
   plugins: [svelte()],
   server: {
     proxy: {
-      '/webrtc': 'http://localhost:8011',
+      '/webrtc': 'http://localhost:8000',
       '/ws': {
-        target: 'ws://localhost:8011',
+        target: 'ws://localhost:8000',
         ws: true,
       },
     },

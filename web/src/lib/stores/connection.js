@@ -2,10 +2,13 @@ import { writable } from 'svelte/store';
 
 export const connectionState = writable('disconnected'); // disconnected | connecting | connected
 export const agentState = writable('idle'); // idle | listening | thinking | speaking
+export const muted = writable(false);
+export const deafened = writable(false);
 
 export const tasks = writable([]);
 export const transcript = writable([]);
-export const boardContent = writable('');
+export const boardStream = writable([]);    // array of {author, content, timestamp}
+export const boardFocused = writable(null);  // currently focused item index
 
 let ws = null;
 let pc = null;
@@ -25,7 +28,15 @@ export function connectWebSocket() {
         tasks.set(msg.tasks);
         break;
       case 'board_post':
-        boardContent.set(msg.content);
+        boardStream.update(s => {
+          const next = [...s, {
+            author: msg.author,
+            content: msg.content,
+            timestamp: msg.timestamp,
+          }];
+          boardFocused.set(next.length - 1);
+          return next;
+        });
         break;
       case 'transcript_add':
         transcript.update(t => [...t, msg.entry]);
@@ -55,9 +66,9 @@ export async function connectWebRTC() {
     // Play received audio
     pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track');
-      const audio = new Audio();
-      audio.srcObject = event.streams[0];
-      audio.play().catch(e => console.warn('[WebRTC] Audio autoplay blocked:', e));
+      remoteAudio = new Audio();
+      remoteAudio.srcObject = event.streams[0];
+      remoteAudio.play().catch(e => console.warn('[WebRTC] Audio autoplay blocked:', e));
     };
 
     // Collect ICE candidates to send to server
@@ -135,10 +146,42 @@ export async function connectWebRTC() {
   }
 }
 
+let remoteAudio = null;
+
+export function toggleMute() {
+  if (!localStream) return;
+  muted.update(m => {
+    const next = !m;
+    localStream.getAudioTracks().forEach(t => t.enabled = !next);
+    return next;
+  });
+}
+
+export function toggleDeafen() {
+  deafened.update(d => {
+    const next = !d;
+    if (remoteAudio) remoteAudio.muted = next;
+    // Deafen implies mute
+    if (next && localStream) {
+      muted.set(true);
+      localStream.getAudioTracks().forEach(t => t.enabled = false);
+    }
+    return next;
+  });
+}
+
 export function sendText(text) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'user_text', text }));
   }
+}
+
+function clearSessionState() {
+  transcript.set([]);
+  boardStream.set([]);
+  boardFocused.set(null);
+  tasks.set([]);
+  agentState.set('idle');
 }
 
 export function disconnect() {
@@ -154,6 +197,13 @@ export function disconnect() {
     ws.close();
     ws = null;
   }
+  if (remoteAudio) {
+    remoteAudio.pause();
+    remoteAudio = null;
+  }
   pcId = null;
+  muted.set(false);
+  deafened.set(false);
+  clearSessionState();
   connectionState.set('disconnected');
 }

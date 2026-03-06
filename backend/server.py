@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -38,23 +39,25 @@ from glarvis.context_injector import BoardContextInjector
 from glarvis.orchestrator import Orchestrator
 from glarvis.response_capture import ResponseCapture
 from glarvis.task_manager import TaskManager
-from glarvis.tools.examples import GetTime, ListDirectory, SearchFiles
+from glarvis.tools.examples import GetTime, ListDirectory, ListTools, SearchFiles
 from glarvis.transcript_capture import TranscriptCapture
 
-load_dotenv(override=True)
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
 SYSTEM_PROMPT = """\
-You are a deeply intelligent desktop voice assistant. Think efficient coworker, not chatbot.
+You are Minerva, a deeply intelligent desktop voice assistant. Think efficient coworker, not chatbot.
 
 Rules:
-- Talk in the first person to sound natural. Be friendly, but concise.
-- Answer questions directly but briefly. If asked "can you hear me", say "yep!" not "got it".
-- For actions and commands, keep it short: "on it", "ok, done", "sure, let me do that".
-- Try not to explain what you did or summarize your actions, unless the user asks for it.
-- But if the user asks for details, give the details they ask for. User requests override these rules.
+- Keep responses SHORT. One sentence max for most things. "Yep", "got it", "on it" are fine responses.
+- If the user is just chatting, chat back briefly. Don't over-explain or monologue.
+- Never list your capabilities or offer help unprompted. The user knows what you can do.
+- Short answers (a sentence or less) can be spoken. Anything longer goes on the board.
+- Don't read out lists, file contents, or structured data — post to the board instead.
+- If you post to the board in response to the user, let them know briefly — "it's on the board", "take a look", etc. If nothing was asked, you don't need to announce it.
+- If the user explicitly asks you to read or explain something, speak it fully.
 - No markdown, bullets, or special characters. This is spoken aloud.
 """
 
@@ -187,15 +190,26 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
         model="claude-haiku-4-5-20251001",
     )
 
-    # Set up tools
+    # Set up tools and orchestrator
     task_manager = TaskManager()
-    tools = [GetTime(), ListDirectory(), SearchFiles()]
-    tools_schema = ToolsSchema(standard_tools=[t.to_function_schema() for t in tools])
 
+    # Build orchestrator first so ListTools can reference it
+    # We need a temporary context to construct the orchestrator, then rebuild with tools
+    temp_context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
+    orchestrator = Orchestrator(task_manager, llm, temp_context, pipeline_task=None)
+
+    # Register all tools
+    for tool in [GetTime(), ListDirectory(), SearchFiles()]:
+        orchestrator.register(tool)
+    orchestrator.register(ListTools(orchestrator))
+
+    # Now build the real context with tools schema
     context = LLMContext(
         messages=[{"role": "system", "content": SYSTEM_PROMPT}],
-        tools=tools_schema,
+        tools=orchestrator.get_tools_schema(),
     )
+    orchestrator.context = context
+    orchestrator._original_system_message = SYSTEM_PROMPT
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -210,10 +224,6 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
             ),
         ),
     )
-
-    orchestrator = Orchestrator(task_manager, llm, context, pipeline_task=None)
-    for tool in tools:
-        orchestrator.register(tool)
 
     # Wire up UI broadcasting
     orchestrator.set_broadcast(broadcast)
@@ -256,7 +266,9 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
+        global active_pipeline_task
         logger.info("[Server] Client disconnected from WebRTC")
+        active_pipeline_task = None
         await task.cancel()
 
     # Run pipeline in background so the HTTP response returns immediately
@@ -266,4 +278,4 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8011)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

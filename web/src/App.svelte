@@ -2,7 +2,6 @@
   import TaskDisplay from './lib/components/TaskDisplay.svelte';
   import Transcript from './lib/components/Transcript.svelte';
   import Board from './lib/components/Board.svelte';
-  import StatusBar from './lib/components/StatusBar.svelte';
 </script>
 
 <div class="app">
@@ -15,7 +14,6 @@
       <Board />
     </div>
   </div>
-  <StatusBar />
 </div>
 
 <style>

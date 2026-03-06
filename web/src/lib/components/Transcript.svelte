@@ -1,41 +1,78 @@
 <script>
-  import { transcript } from '../stores/connection.js';
+  import { transcript, sendText } from '../stores/connection.js';
   import { afterUpdate } from 'svelte';
+  import VoiceControls from './VoiceControls.svelte';
 
   let container;
+  let inputText = '';
 
   afterUpdate(() => {
     if (container) {
       container.scrollTop = container.scrollHeight;
     }
   });
+
+  function handleSubmit() {
+    const text = inputText.trim();
+    if (!text) return;
+    sendText(text);
+    inputText = '';
+  }
+
+  function handleKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  }
 </script>
 
-<div class="transcript" bind:this={container}>
-  {#each $transcript as entry (entry.id)}
-    <div class="entry entry-{entry.role}">
-      <span class="entry-role">{entry.role === 'user' ? 'You' : 'Agent'}</span>
-      {#if entry.type === 'tool_call'}
-        <span class="entry-tool">[{entry.tool}]</span>
-      {:else}
-        <span class="entry-text">{entry.text}</span>
-      {/if}
-    </div>
-  {/each}
+<div class="transcript-wrapper">
+  <div class="transcript" bind:this={container}>
+    {#each $transcript as entry (entry.id)}
+      <div class="entry entry-{entry.role}">
+        <span class="entry-role">{entry.role === 'user' ? 'You' : 'Agent'}</span>
+        {#if entry.type === 'tool_call'}
+          <span class="entry-tool">[{entry.tool}]</span>
+        {:else}
+          <span class="entry-text">{entry.text}</span>
+        {/if}
+      </div>
+    {/each}
 
-  {#if $transcript.length === 0}
-    <div class="empty">Waiting for conversation...</div>
-  {/if}
+    {#if $transcript.length === 0}
+      <div class="empty">Waiting for conversation...</div>
+    {/if}
+  </div>
+
+  <form class="input-bar" on:submit|preventDefault={handleSubmit}>
+    <input
+      type="text"
+      bind:value={inputText}
+      on:keydown={handleKeydown}
+      placeholder="Type a message..."
+    />
+    <button type="submit" disabled={!inputText.trim()}>Send</button>
+  </form>
+
+  <VoiceControls />
 </div>
 
 <style>
+  .transcript-wrapper {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+
   .transcript {
     display: flex;
     flex-direction: column;
     gap: 8px;
     padding: 12px;
     overflow-y: auto;
-    height: 100%;
+    flex: 1;
+    min-height: 0;
     font-size: 14px;
   }
 
@@ -80,5 +117,48 @@
     font-style: italic;
     text-align: center;
     margin-top: 24px;
+  }
+
+  .input-bar {
+    display: flex;
+    gap: 6px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--color-border);
+    background: var(--color-bg);
+  }
+
+  .input-bar input {
+    flex: 1;
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+
+  .input-bar input:focus {
+    border-color: var(--color-blue);
+  }
+
+  .input-bar input::placeholder {
+    color: var(--color-muted);
+  }
+
+  .input-bar button {
+    padding: 6px 12px;
+    border: none;
+    border-radius: 4px;
+    background: var(--color-blue);
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+  }
+
+  .input-bar button:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 </style>
