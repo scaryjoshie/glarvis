@@ -55,6 +55,7 @@ class Orchestrator:
         self._tools: dict[str, BaseTool] = {}
         self._broadcast: Callable[[dict], Coroutine] | None = None
         self._transcript_id = 0
+        self._board_post_index = 0
 
         # Wire up notification delivery
         self.task_manager.on_notification = self._on_notification
@@ -72,18 +73,42 @@ class Orchestrator:
         self._transcript_id += 1
         return self._transcript_id
 
-    async def broadcast_board_post(self, author: str, content: str):
-        """Send a board post to the UI."""
+    async def broadcast_board_post(self, author: str, content: str) -> int:
+        """Send a board post to the UI. Returns the post index."""
+        index = self._board_post_index
+        self._board_post_index += 1
         if not self._broadcast:
-            return
+            return index
         await self._broadcast({
             "type": "board_post",
             "author": author,
             "content": content,
             "timestamp": time.time(),
         })
+        return index
 
-    async def broadcast_transcript(self, role: str, text: str, entry_type: str = "speech", tool: str | None = None):
+    async def broadcast_welcome(self):
+        """Post available tools to the board on connection."""
+        if not self._tools:
+            return
+
+        lines = ["# Minerva\n"]
+        for tool in self._tools.values():
+            tool_type = type(tool).__bases__[0].__name__
+            tag = {"InlineTool": "instant", "AsyncTool": "background", "SessionTool": "session"}.get(tool_type, tool_type)
+            lines.append(f"### {tool.name}")
+            lines.append(f"`{tag}` {tool.description}\n")
+
+        lines.append("---")
+        lines.append("*Say or type anything to get started.*")
+
+        await self.broadcast_board_post("minerva", "\n".join(lines))
+
+    async def broadcast_transcript(
+        self, role: str, text: str, entry_type: str = "speech",
+        tool: str | None = None, tool_args: dict | None = None,
+        tool_result: Any = None,
+    ):
         """Send a transcript entry to the UI."""
         if not self._broadcast:
             return
@@ -95,6 +120,10 @@ class Orchestrator:
         }
         if tool:
             entry["tool"] = tool
+        if tool_args is not None:
+            entry["tool_args"] = tool_args
+        if tool_result is not None:
+            entry["tool_result"] = str(tool_result)[:500]
         await self._broadcast({"type": "transcript_add", "entry": entry})
 
     def register(self, tool: BaseTool):
@@ -123,20 +152,24 @@ class Orchestrator:
         """Execute a tool, routing by type: isinstance check, not metadata."""
         kwargs = dict(params.arguments)
 
-        # Broadcast tool call to transcript
-        await self.broadcast_transcript("assistant", tool.name, entry_type="tool_call", tool=tool.name)
+        # Broadcast tool call with inputs to transcript
+        await self.broadcast_transcript(
+            "assistant", tool.name,
+            entry_type="tool_call", tool=tool.name,
+            tool_args=kwargs,
+        )
 
         if isinstance(tool, SessionTool):
             # TODO: check for active session and route to on_input()
             task_id = await self.task_manager.spawn(tool, kwargs)
-            return TaskResult(
+            result = TaskResult(
                 result=f"Task {task_id} started",
                 guide=f"{tool.name} session is running",
             )
         elif isinstance(tool, AsyncTool):
             # Background tool — spawn on the TaskManager
             task_id = await self.task_manager.spawn(tool, kwargs)
-            return TaskResult(
+            result = TaskResult(
                 result=f"Task {task_id} started",
                 guide=f"{tool.name} is running",
             )
@@ -146,10 +179,18 @@ class Orchestrator:
                 result = await tool.run(**kwargs)
                 if result and result.board_content:
                     await self.broadcast_board_post(tool.name, result.board_content)
-                return result
             except Exception as e:
                 logger.error(f"[Orchestrator] {tool.name} failed: {e}")
-                return TaskResult(result=f"Error: {e}")
+                result = TaskResult(result=f"Error: {e}")
+
+        # Broadcast tool result
+        await self.broadcast_transcript(
+            "assistant", tool.name,
+            entry_type="tool_result", tool=tool.name,
+            tool_result=result.result if result else None,
+        )
+
+        return result
 
     def _on_notification(self, notif: Notification):
         """Deliver a notification to the user via TTS."""
@@ -159,10 +200,19 @@ class Orchestrator:
         # Use queue_frame on the pipeline task to inject into the pipeline
         self.pipeline_task.queue_frame(frame)
 
-    def _on_board_post(self, author: str, content: str):
+    def _on_board_post(self, task_id: str, author: str, content: str):
         """Called when an async task posts to the board."""
         if self._broadcast:
-            asyncio.create_task(self.broadcast_board_post(author, content))
+            async def _post():
+                index = await self.broadcast_board_post(author, content)
+                # Link the board post back to the task
+                state = self.task_manager.active.get(task_id) or next(
+                    (s for s in self.task_manager.history if s.id == task_id), None
+                )
+                if state:
+                    state.board_post_index = index
+                    self.task_manager._notify_change()
+            asyncio.create_task(_post())
 
     def _on_task_change(self):
         """Called when any task state changes. Broadcasts to UI."""

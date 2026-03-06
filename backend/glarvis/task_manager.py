@@ -28,6 +28,7 @@ class TaskState:
     completed_at: float | None = None
     result: TaskResult | None = None
     progress: str | None = None  # latest progress message from the tool
+    board_post_index: int | None = None  # index into frontend boardStream
     _task: asyncio.Task | None = field(default=None, repr=False)
 
 
@@ -66,7 +67,7 @@ class TaskManager:
         # Callbacks (set by orchestrator)
         self.on_notification: Callable[[Notification], Any] | None = None
         self.on_change: Callable[[], Any] | None = None
-        self.on_board_post: Callable[[str, str], Any] | None = None  # (author, content)
+        self.on_board_post: Callable[[str, str, str], Any] | None = None  # (task_id, author, content)
 
     def _next_id(self) -> str:
         self._counter += 1
@@ -133,7 +134,7 @@ class TaskManager:
         if tool.display in ("board", "both") and result and result.board_content:
             logger.info(f"[TaskManager] {tool.name} posted to board")
             if self.on_board_post:
-                self.on_board_post(tool.name, result.board_content)
+                self.on_board_post(task_id, tool.name, result.board_content)
 
         # Notification routing
         if tool.notification == "silent":
@@ -198,6 +199,7 @@ class TaskManager:
         now = time.time()
         items = []
 
+        # Always show active tasks
         for state in self.active.values():
             items.append({
                 "id": state.id,
@@ -205,10 +207,13 @@ class TaskManager:
                 "status": state.status,
                 "elapsed": now - state.started_at,
                 "progress": state.progress,
+                "board_post_index": state.board_post_index,
             })
 
-        # Include recent history
+        # Only show completed tasks if persist_in_display is True
         for state in list(self.history)[-5:]:
+            if not state.tool.persist_in_display:
+                continue
             elapsed = (state.completed_at or now) - state.started_at
             items.append({
                 "id": state.id,
@@ -216,6 +221,7 @@ class TaskManager:
                 "status": state.status,
                 "elapsed": elapsed,
                 "progress": state.result.guide if state.result else None,
+                "board_post_index": state.board_post_index,
             })
 
         return items

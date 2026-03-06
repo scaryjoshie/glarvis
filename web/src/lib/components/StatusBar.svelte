@@ -1,11 +1,5 @@
 <script>
-  import { connectionState, agentState, muted } from '../stores/connection.js';
-  import { connectWebSocket, connectWebRTC, disconnect, toggleMute } from '../stores/connection.js';
-
-  function handleConnect() {
-    connectWebSocket();
-    connectWebRTC();
-  }
+  import { connectionState, agentState } from '../stores/connection.js';
 
   $: stateLabel = {
     idle: 'Idle',
@@ -25,24 +19,19 @@
 <div class="status-bar">
   <div class="left">
     {#if $connectionState === 'connected'}
-      <button class="mute-btn" class:muted={$muted} on:click={toggleMute}>
-        {$muted ? 'Unmute' : 'Mute'}
-      </button>
       <span class="indicator" style="background: {stateColor}"></span>
       <span class="state-label">{stateLabel}</span>
     {:else if $connectionState === 'connecting'}
       <span class="indicator connecting"></span>
       <span class="state-label">Connecting...</span>
     {:else}
-      <button class="connect-btn" on:click={handleConnect}>Connect</button>
+      <span class="indicator" style="background: var(--color-muted)"></span>
+      <span class="state-label">Disconnected</span>
     {/if}
   </div>
 
   <div class="right">
     <span class="model-label">Claude Haiku 4.5</span>
-    {#if $connectionState === 'connected'}
-      <button class="disconnect-btn" on:click={disconnect}>Disconnect</button>
-    {/if}
   </div>
 </div>
 
@@ -53,19 +42,20 @@
     justify-content: space-between;
     padding: 8px 16px;
     border-top: 1px solid var(--color-border);
-    font-size: 13px;
+    font-size: 12px;
+    min-height: 32px;
     background: var(--color-bg);
   }
 
   .left, .right {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
   }
 
   .indicator {
-    width: 8px;
-    height: 8px;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     flex-shrink: 0;
   }
@@ -81,60 +71,12 @@
   }
 
   .state-label {
-    color: var(--color-text);
+    color: var(--color-muted);
   }
 
   .model-label {
     color: var(--color-muted);
     font-family: var(--font-mono);
-    font-size: 12px;
-  }
-
-  .connect-btn {
-    background: var(--color-blue);
-    color: white;
-    border: none;
-    padding: 4px 16px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 13px;
-  }
-
-  .connect-btn:hover {
-    opacity: 0.9;
-  }
-
-  .disconnect-btn {
-    background: none;
-    border: 1px solid var(--color-border);
-    color: var(--color-muted);
-    padding: 2px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-  }
-
-  .disconnect-btn:hover {
-    border-color: var(--color-red);
-    color: var(--color-red);
-  }
-
-  .mute-btn {
-    background: none;
-    border: 1px solid var(--color-border);
-    color: var(--color-text);
-    padding: 2px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 12px;
-  }
-
-  .mute-btn:hover {
-    border-color: var(--color-muted);
-  }
-
-  .mute-btn.muted {
-    border-color: var(--color-red);
-    color: var(--color-red);
+    font-size: 11px;
   }
 </style>

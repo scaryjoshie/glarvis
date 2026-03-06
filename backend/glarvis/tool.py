@@ -112,6 +112,7 @@ class AsyncTool(BaseTool):
     notification: NotificationLevel = "notify"
     display: DisplayMode = "board"
     ttl: int | None = None
+    persist_in_display: bool = False  # auto-hide from TaskDisplay on completion
 
     async def on_start(self) -> None:
         """Called when the task begins executing."""
@@ -162,6 +163,7 @@ class SessionTool(AsyncTool):
     """
 
     ttl: int | None = None
+    persist_in_display: bool = True  # session tools stay visible by default
 
     @abstractmethod
     async def on_input(self, **kwargs) -> TaskResult:

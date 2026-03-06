@@ -34,6 +34,14 @@
         <span class="entry-role">{entry.role === 'user' ? 'You' : 'Agent'}</span>
         {#if entry.type === 'tool_call'}
           <span class="entry-tool">[{entry.tool}]</span>
+          {#if entry.tool_args && Object.keys(entry.tool_args).length > 0}
+            <span class="entry-tool-detail">{JSON.stringify(entry.tool_args)}</span>
+          {/if}
+        {:else if entry.type === 'tool_result'}
+          <span class="entry-tool result">[{entry.tool} result]</span>
+          {#if entry.tool_result}
+            <span class="entry-tool-detail">{entry.tool_result}</span>
+          {/if}
         {:else}
           <span class="entry-text">{entry.text}</span>
         {/if}
@@ -110,6 +118,20 @@
     background: var(--color-surface);
     border-radius: 3px;
     width: fit-content;
+  }
+
+  .entry-tool.result {
+    color: var(--color-green);
+    opacity: 0.7;
+  }
+
+  .entry-tool-detail {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--color-muted);
+    opacity: 0.6;
+    word-break: break-all;
+    line-height: 1.3;
   }
 
   .empty {

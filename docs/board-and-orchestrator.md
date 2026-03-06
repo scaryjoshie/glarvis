@@ -1,93 +1,110 @@
-# TaskManager and Orchestrator
+# TaskManager, Orchestrator, and Board
 
-## TaskManager (`glarvis/task_manager.py`)
+## TaskManager (`backend/glarvis/task_manager.py`)
 
-The TaskManager is the central state manager for async tasks. It tracks active tasks, maintains completion history, and queues notifications.
+Manages the lifecycle of async/session tasks.
 
-### State model
+### TaskState
 
-```
-TaskState:
-    id: str                  # "task_1", "task_2", ...
-    tool: Tool               # reference to the tool instance
-    status: pending | running | completed | failed | expired
+```python
+@dataclass
+class TaskState:
+    id: str                    # "task_1", "task_2", ...
+    tool: AsyncTool            # reference to the tool instance
+    status: str                # pending | running | completed | failed | expired
     started_at: float
     completed_at: float | None
     result: TaskResult | None
-    progress: str | None     # latest progress message
-    _task: asyncio.Task      # the actual coroutine
+    progress: str | None       # latest progress message
+    board_post_index: int | None  # links to a board post in the UI
+    _task: asyncio.Task        # the actual coroutine
 ```
 
 ### Key methods
 
 - `spawn(tool, kwargs)` — creates an asyncio task, tracks it, enforces TTL
 - `post_progress(task_id, update)` — tools call this mid-execution to report progress
-- `snapshot()` — renders current state as text for LLM context injection. Returns None if empty (saves tokens).
-- `drain_notifications()` — pops all pending notifications (called by orchestrator)
+- `snapshot()` — renders current state as text for LLM context injection (returns None if empty)
+- `to_ui_list()` — serializes tasks for the frontend, filtering by `persist_in_display`
+
+### Callbacks
+
+- `on_notification(notif)` — fired when a task completes with notify/interrupt level
+- `on_change()` — fired on any task state change (broadcasts to UI)
+- `on_board_post(task_id, author, content)` — fired when an async task posts to the board
 
 ### Completion routing
 
-When a task completes, `_handle_completion()` routes the result based on tool metadata:
-- `display="board"` or `"both"` — prints to terminal (future: sends to Board display in UI)
-- `notification="notify"` or `"interrupt"` — queues a Notification, calls `on_notification` callback
-- `notification="silent"` — no notification
+When a task completes, `_handle_completion()`:
+1. Routes `board_content` to the board via `on_board_post`
+2. Queues a `Notification` if notification level is "notify" or "interrupt"
+3. Moves the task from `active` to `history` (capped at 20)
 
-After routing, the task moves from `active` to `history` (capped at 20 entries).
+### Task visibility
 
-### Notification
+- `persist_in_display = False` (AsyncTool default): task chip removed from UI after completion
+- `persist_in_display = True` (SessionTool default): task chip stays visible
+- InlineTools never enter TaskManager at all
 
-```
-Notification:
-    task_id: str
-    message: str           # from TaskResult.speak_text or default "{tool.name} has completed"
-    level: "notify" | "interrupt"
-```
+## Orchestrator (`backend/glarvis/orchestrator.py`)
 
-## Orchestrator (`glarvis/orchestrator.py`)
-
-The Orchestrator wires tools into Pipecat. It sits between the tool system and the pipeline.
+Wires tools, TaskManager, Pipecat pipeline, and UI together.
 
 ### Responsibilities
 
-1. **Register tools** — creates a Pipecat function handler per tool, registers with `llm.register_function()`
-2. **Execute tools** — decides inline vs TaskManager spawn based on tool metadata
-3. **Inject context** — updates system message with task state before each LLM turn
-4. **Deliver notifications** — pushes TTSSpeakFrame into pipeline when TaskManager notifications fire
+1. **Register tools** — creates Pipecat function handlers, registers with LLM
+2. **Execute tools** — routes by isinstance(): InlineTool runs inline, AsyncTool/SessionTool spawns on TaskManager
+3. **Inject context** — updates system message with task state snapshot before each LLM turn
+4. **Deliver notifications** — pushes TTSSpeakFrame into pipeline for spoken notifications
+5. **Broadcast to UI** — sends transcript entries, board posts, and task updates via WebSocket
 
-### Registration flow
+### Execution routing
 
+```python
+if isinstance(tool, SessionTool):
+    # TODO: check for active session, route to on_input()
+    task_id = await task_manager.spawn(tool, kwargs)
+elif isinstance(tool, AsyncTool):
+    task_id = await task_manager.spawn(tool, kwargs)
+else:  # InlineTool
+    result = await tool.run(**kwargs)
+    if result.board_content:
+        await broadcast_board_post(tool.name, result.board_content)
 ```
-orchestrator.register(tool)
-  -> creates _handler(params) closure
-  -> calls llm.register_function(tool.name, _handler)
-  -> _handler routes to _execute_tool() then result_callback()
-```
 
-### Context injection
+### UI broadcasting
 
-`inject_task_context()` is called by `BoardContextInjector` (a FrameProcessor) before each LLM turn. It appends the TaskManager's snapshot to the system message so the LLM knows about active/completed tasks.
+The orchestrator holds a `broadcast` function (set by server.py) for pushing to WebSocket clients:
 
-The original system message is preserved; the snapshot is appended fresh each turn.
+- `broadcast_transcript(role, text, entry_type, tool, tool_args, tool_result)` — transcript entries
+- `broadcast_board_post(author, content)` — board posts (returns post index for linking)
+- `broadcast_welcome()` — posts available tools listing on connect
+- Task updates are broadcast via `on_change` callback from TaskManager
 
-### Notification delivery
+### Board post linking
 
-When the TaskManager fires `on_notification`, the orchestrator creates a `TTSSpeakFrame` and queues it on the `PipelineTask`. This causes the TTS to speak the notification. Currently there's no distinction between "notify" (queue) and "interrupt" (preempt) — both push immediately.
+The orchestrator tracks a `_board_post_index` counter. When a board post is created, the index is stored on the corresponding `TaskState.board_post_index`. The frontend uses this to link task chips to board items (clicking a chip focuses the linked board post).
 
-## BoardContextInjector (`glarvis/context_injector.py`)
+## BoardContextInjector (`backend/glarvis/context_injector.py`)
 
-A thin FrameProcessor that:
-1. Logs STT output when it sees a `TranscriptionFrame`
-2. Calls `orchestrator.inject_task_context()` when it sees an `LLMRunFrame`
-3. Passes all frames through unchanged
+A FrameProcessor that intercepts `LLMRunFrame` and calls `orchestrator.inject_task_context()` to append the task state snapshot to the system message before each LLM turn.
 
-Sits in the pipeline between UserAggregator and LLM.
+## Board (frontend)
 
-## SpeechGate (`glarvis/gate.py`)
+The board is a stream of markdown posts displayed in the right panel of the UI.
 
-Built but NOT currently in the pipeline. A wake-word gate that:
-- In LISTENING mode: swallows transcriptions unless they contain a wake word
-- In ACTIVE mode: passes everything through for 30s, then reverts
-- Wake words: configurable, defaults include common mishearings
-- Strips the wake word from the transcription before passing through
+### Data model
 
-Would go between STT and UserAggregator if enabled.
+Each board post has: `author` (tool name or "minerva"), `timestamp`, `content` (markdown).
+
+Posts are stored in `boardStream` (Svelte writable array). `boardFocused` tracks which post is shown in the main area.
+
+### UI layout
+
+- **Main area**: renders the focused post as HTML (via marked.js)
+- **Stream sidebar**: chronological list of posts, click to focus, hover to preview
+- Always visible, shows "No posts yet" when empty
+
+### Welcome post
+
+On WebRTC client connect, the orchestrator posts a welcome message listing all registered tools with their types (instant/background/session).

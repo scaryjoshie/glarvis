@@ -4,10 +4,10 @@
 
 When a tool runs, its result needs to end up in two places:
 
-1. **The Board** — for display/notification routing (show on terminal, speak to user, etc.)
-2. **The LLM context** — so the agent *remembers* what happened in prior turns
+1. **The Board** — for visual display (via `board_content` in TaskResult)
+2. **The LLM context** — so the agent *remembers* what happened in prior turns (via `result` in TaskResult)
 
-These are independent concerns. A tool with `display="board"` should still have its result stored in the LLM conversation history, even if the agent doesn't speak about it immediately. Otherwise the agent has no memory of prior tool calls and will re-run them when asked about old results.
+These are independent concerns. A tool that posts to the board should still have its result stored in the LLM conversation history. Otherwise the agent has no memory of prior tool calls and will re-run them when asked about old results.
 
 ## How Pipecat's result_callback Works
 

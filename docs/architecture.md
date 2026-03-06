@@ -2,22 +2,28 @@
 
 ## Pipeline
 
-The voice agent is a Pipecat pipeline with local audio I/O:
+The voice agent runs as a Pipecat pipeline served over WebRTC via FastAPI:
 
 ```
-Mic (PyAudio) → STT (Deepgram) → UserAggregator+VAD → ContextInjector → LLM (Claude) → TTS (Cartesia) → Speaker (PyAudio) → AssistantAggregator
+Browser (WebRTC) -> STT (Deepgram) -> TranscriptCapture -> UserAggregator+VAD -> BoardContextInjector -> LLM (Claude) -> ResponseCapture -> TTS (Cartesia) -> Browser (WebRTC) -> AssistantAggregator
 ```
 
 ### Frame flow
 
-1. `LocalAudioTransport.input()` captures mic audio via PyAudio
+1. `SmallWebRTCTransport.input()` receives audio from browser via WebRTC (browser handles echo cancellation)
 2. `DeepgramSTTService` transcribes streaming audio to text
-3. `UserAggregator` + `SileroVAD` bundles transcription into an `LLMRunFrame` when the user stops talking (stop_secs=0.8, confidence=0.8)
-4. `BoardContextInjector` intercepts `LLMRunFrame`, logs STT output, appends board snapshot to system message
-5. `AnthropicLLMService` (Haiku 4.5) generates text response and/or tool calls
-6. `CartesiaTTSService` (Sonic-3, speed 1.25x) converts text to audio
-7. `LocalAudioTransport.output()` plays audio through speakers
-8. `AssistantAggregator` records the assistant's response back into context
+3. `TranscriptCapture` broadcasts user speech to the UI transcript via WebSocket
+4. `UserAggregator` + `SileroVAD` bundles transcription into an `LLMRunFrame` when the user stops talking
+5. `BoardContextInjector` intercepts `LLMRunFrame`, injects task state snapshot into system message
+6. `AnthropicLLMService` (Haiku 4.5) generates text response and/or tool calls
+7. `ResponseCapture` broadcasts assistant speech to the UI transcript via WebSocket
+8. `CartesiaTTSService` (Sonic-3, speed 1.25x) converts text to audio
+9. `SmallWebRTCTransport.output()` sends audio back to browser
+10. `AssistantAggregator` records the assistant's response back into context
+
+### Text input path
+
+Typed text from the web UI is sent over WebSocket as `{type: "user_text", text}`. The server injects it as a `TranscriptionFrame` via `pipeline_task.queue_frame()`, entering the same pipeline path as speech.
 
 ### Key Pipecat concepts
 
@@ -32,13 +38,22 @@ Mic (PyAudio) → STT (Deepgram) → UserAggregator+VAD → ContextInjector → 
 | Service | Provider | Config |
 |---------|----------|--------|
 | STT | Deepgram | Default streaming |
-| LLM | Anthropic (Claude Haiku 4.5) | OpenAI-compatible also available via Cerebras |
+| LLM | Anthropic (Claude Haiku 4.5) | claude-haiku-4-5-20251001 |
 | TTS | Cartesia Sonic-3 | speed=1.25x, voice configurable via CARTESIA_VOICE_ID |
 | VAD | Silero | confidence=0.8, start=0.2s, stop=0.8s, min_volume=0.6 |
+| Transport | SmallWebRTCTransport | Browser-native AEC, signaling via FastAPI |
 
-All API keys are in `.env`. The LLM can be swapped between Anthropic and OpenAI-compatible (Cerebras) by changing the service class in main.py.
+All API keys are in `backend/.env`.
 
-## Known limitations
+## Server (`backend/server.py`)
 
-- **No echo cancellation** with LocalAudioTransport. Speaker audio bleeds into mic. Fix: switch to WebRTC transport (SmallWebRTCTransport/DailyTransport) which has browser-native AEC. For now, use headphones.
-- **VAD sensitivity**: confidence=0.8 and min_volume=0.6 are tuned to reduce self-interruption but aren't perfect with speakers.
+FastAPI serves three concerns:
+1. **WebRTC signaling** — `/webrtc/offer` and `/webrtc/ice` endpoints for peer connection
+2. **WebSocket** — `/ws` for UI updates (server->client) and text input (client->server)
+3. **Pipeline lifecycle** — `on_new_connection()` builds and runs the pipeline per WebRTC peer
+
+A `broadcast()` function sends JSON messages to all connected WebSocket clients. The orchestrator uses this to push transcript entries, board posts, and task updates to the UI.
+
+## Echo Cancellation
+
+SmallWebRTCTransport runs audio through the browser, which provides native acoustic echo cancellation (AEC). This solved the feedback loop that existed with the old LocalAudioTransport (PyAudio) approach. No headphones required.

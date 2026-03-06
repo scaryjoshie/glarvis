@@ -16,6 +16,10 @@ let localStream = null;
 let pcId = null;
 
 export function connectWebSocket() {
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
@@ -53,6 +57,7 @@ export function connectWebSocket() {
 }
 
 export async function connectWebRTC() {
+  clearSessionState();
   connectionState.set('connecting');
 
   try {

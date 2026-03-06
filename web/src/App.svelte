@@ -2,6 +2,7 @@
   import TaskDisplay from './lib/components/TaskDisplay.svelte';
   import Transcript from './lib/components/Transcript.svelte';
   import Board from './lib/components/Board.svelte';
+  import StatusBar from './lib/components/StatusBar.svelte';
 </script>
 
 <div class="app">
@@ -10,8 +11,11 @@
     <div class="panel transcript-panel">
       <Transcript />
     </div>
-    <div class="panel board-panel">
-      <Board />
+    <div class="right-column">
+      <div class="panel board-panel">
+        <Board />
+      </div>
+      <StatusBar />
     </div>
   </div>
 </div>
@@ -41,7 +45,15 @@
     border-right: 1px solid var(--color-border);
   }
 
+  .right-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
   .board-panel {
     flex: 1;
+    min-height: 0;
   }
 </style>

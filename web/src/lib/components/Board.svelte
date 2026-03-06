@@ -4,7 +4,10 @@
 
   marked.setOptions({ breaks: true, gfm: true });
 
-  $: focused = $boardFocused !== null ? $boardStream[$boardFocused] : null;
+  let hoveredIndex = null;
+
+  $: displayIndex = hoveredIndex !== null ? hoveredIndex : $boardFocused;
+  $: focused = displayIndex !== null ? $boardStream[displayIndex] : null;
   $: focusedHtml = focused ? marked.parse(focused.content) : '';
 
   function formatTime(ts) {
@@ -35,23 +38,27 @@
     {/if}
   </div>
 
-  <!-- Stream sidebar -->
-  {#if $boardStream.length > 0}
-    <div class="board-stream">
-      <div class="stream-label">Stream</div>
-      {#each $boardStream as item, i}
-        <button
-          class="stream-item"
-          class:active={$boardFocused === i}
-          on:click={() => focusItem(i)}
-        >
-          <span class="stream-author">{item.author}</span>
-          <span class="stream-time">{formatTime(item.timestamp)}</span>
-          <span class="stream-preview">{item.content.slice(0, 60)}</span>
-        </button>
-      {/each}
-    </div>
-  {/if}
+  <!-- Stream sidebar (always visible) -->
+  <div class="board-stream">
+    <div class="stream-label">Stream</div>
+    {#each $boardStream as item, i}
+      <button
+        class="stream-item"
+        class:active={$boardFocused === i}
+        class:hovered={hoveredIndex === i && $boardFocused !== i}
+        on:click={() => focusItem(i)}
+        on:mouseenter={() => hoveredIndex = i}
+        on:mouseleave={() => hoveredIndex = null}
+      >
+        <span class="stream-author">{item.author}</span>
+        <span class="stream-time">{formatTime(item.timestamp)}</span>
+        <span class="stream-preview">{item.content.slice(0, 60)}</span>
+      </button>
+    {/each}
+    {#if $boardStream.length === 0}
+      <div class="stream-empty">No posts yet</div>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -188,6 +195,11 @@
     background: var(--color-surface);
   }
 
+  .stream-item.hovered {
+    border-color: var(--color-border);
+    background: var(--color-surface);
+  }
+
   .stream-author {
     font-size: 11px;
     font-weight: 600;
@@ -226,5 +238,13 @@
     font-size: 13px;
     color: var(--color-muted);
     opacity: 0.6;
+  }
+
+  .stream-empty {
+    font-size: 11px;
+    color: var(--color-muted);
+    opacity: 0.5;
+    padding: 8px 6px;
+    font-style: italic;
   }
 </style>

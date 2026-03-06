@@ -2,86 +2,94 @@
 
 ## Overview
 
-Tools are the primary way the agent interacts with the system. Each tool is a Python class that subclasses `Tool` (in `glarvis/tool.py`) and declares two layers of metadata:
+Tools are the primary way the agent interacts with the system. Each tool subclasses one of three types defined in `backend/glarvis/tool.py`:
 
-1. **LLM-facing** — what the model sees: name, description, parameters, required
-2. **System-facing** — what the orchestrator uses: notification level, display mode, TTL, hooks
+- **InlineTool** — runs directly in the LLM turn, returns result immediately
+- **AsyncTool** — spawns on TaskManager as a background task
+- **SessionTool** — long-lived interactive tool that accepts subsequent input
 
-The LLM never sees the system-facing metadata. It just calls tools by name. The orchestrator reads the metadata to decide how to execute the tool and route its results.
+The orchestrator routes by `isinstance()` check, not metadata inference.
 
-## Tool base class (`glarvis/tool.py`)
+## Tool types
+
+### BaseTool (ABC)
+
+Abstract base class. Cannot be instantiated directly. Declares the interface:
 
 ```python
-class Tool:
-    # LLM-facing
+class BaseTool(ABC):
     name: str              # function name the LLM calls
     description: str       # what the LLM sees in the schema
     parameters: dict       # JSON Schema properties
     required: list[str]    # required parameter names
-
-    # System-facing
-    notification: "silent" | "notify" | "interrupt"  # how to alert the user
-    display: "board" | "speak" | "both" | "none"     # where to show results
-    ttl: int | None        # max seconds before expiry, None = no limit
-    cancel_on_interruption: bool  # cancel if user interrupts
+    cancel_on_interruption: bool = True
 
     async def run(self, **kwargs) -> TaskResult  # override this
+    def to_function_schema() -> FunctionSchema   # auto-generates Pipecat schema
 ```
 
-### TaskResult
+### InlineTool
 
-Every tool returns a `TaskResult`:
-- `value` — the raw result (goes to LLM context via result_callback)
-- `display_text` — what to show on the board/terminal
-- `speak_text` — what to say aloud (only for notify/interrupt tools)
+- Runs directly in the LLM turn, blocks until complete
+- Does NOT appear in TaskDisplay, never enters TaskManager
+- Good for: get_time, read_file, write_board, quick lookups
+- Default: notification="silent", display="none"
 
-### Lifecycle hooks
+### AsyncTool
 
-Override these in subclasses for custom behavior:
-- `on_start()` — called when execution begins
-- `on_progress(update)` — called by the tool itself to report progress
-- `on_complete(result)` — called after run() succeeds
-- `on_expire()` — called if TTL is exceeded
+- Spawns on TaskManager as an asyncio task
+- Appears in TaskDisplay as a chip while running
+- `persist_in_display = False` — auto-hides from TaskDisplay on completion
+- LLM gets a placeholder result ("Task task_1 started"), real result arrives via snapshot on next turn
+- Has TTL support (optional timeout)
+- Has `task_display_status()` for custom chip text
+- Good for: search_codebase, downloads, builds
+- Default: notification="notify", display="board"
 
-### Pipecat integration
+### SessionTool (extends AsyncTool)
 
-`to_function_schema()` converts the tool to Pipecat's `FunctionSchema` format for registration with the LLM service.
+- Long-lived interactive tool, stays alive after initial `run()`
+- Subsequent LLM calls route to `on_input()` instead of spawning new task
+- Has `close()` method for cleanup
+- `persist_in_display = True` — stays visible in TaskDisplay
+- No TTL by default
+- Good for: Claude Code, browser automation, stateful interactions
+- **Note**: `on_input()` routing is not yet wired in the orchestrator
 
-## Inline vs async execution
-
-The orchestrator decides execution mode implicitly from the tool's metadata:
+## TaskResult
 
 ```python
-if tool.ttl or tool.notification != "silent":
-    # Async — spawn on the Board, return placeholder to LLM
-    await board.spawn(tool, kwargs)
-else:
-    # Inline — run directly, return result to LLM immediately
-    await tool.run(**kwargs)
+@dataclass
+class TaskResult:
+    result: Any = None           # raw data for LLM context
+    guide: str | None = None     # natural language hint for the LLM
+    board_content: str | None = None  # rich markdown for Board display
 ```
 
-**Inline tools** (silent + no TTL): execute in the handler, result goes straight to LLM. Good for fast lookups (get_time, simple queries).
+- `result`: goes to LLM via result_callback. The LLM sees this.
+- `guide`: suggestion for what the LLM might say. Not a script — LLM can rephrase or ignore.
+- `board_content`: markdown posted to the Board stream. The LLM does NOT see this.
 
-**Async tools** (has TTL or non-silent notification): spawned on the Board as asyncio tasks. The LLM gets a "task started" placeholder. The Board manages lifecycle, TTL enforcement, and completion routing.
+## Current tools (`backend/glarvis/tools/examples.py`)
 
-## Example tools (`glarvis/tools/examples.py`)
-
-| Tool | Notification | Display | TTL | Execution |
-|------|-------------|---------|-----|-----------|
-| GetTime | silent | none | - | inline |
-| ListDirectory | silent | board | - | inline |
-| SearchFiles | notify | board | 15s | async (Board) |
+| Tool | Type | Description |
+|------|------|-------------|
+| GetTime | InlineTool | Returns current date and time |
+| ListDirectory | InlineTool | Lists files, posts to board |
+| SearchFiles | AsyncTool | Searches files by pattern, posts to board |
+| WriteBoard | InlineTool | Posts arbitrary markdown to the board |
+| ListTools | InlineTool | Lists all registered tools on the board |
+| DebugContext | InlineTool | Dumps full LLM context, messages, and task state to board |
 
 ## Writing a new tool
 
-1. Create a class that subclasses `Tool`
-2. Set the LLM-facing fields (name, description, parameters, required)
-3. Set the system-facing fields (notification, display, ttl)
-4. Implement `async def run(self, **kwargs) -> TaskResult`
-5. Register it in main.py: add to the `tools` list
+1. Subclass `InlineTool`, `AsyncTool`, or `SessionTool`
+2. Set `name`, `description`, `parameters`, `required`
+3. Implement `async def run(self, **kwargs) -> TaskResult`
+4. Register in `server.py`: `orchestrator.register(MyTool())`
 
-The orchestrator and board handle everything else — schema registration, execution routing, result delivery, and context management.
+Tools that need a reference to the orchestrator (like ListTools, DebugContext) take it as a constructor arg.
 
-## Important: result_callback
+## Result routing
 
-Tool results ALWAYS go back to the LLM via `result_callback`. See `docs/tool-results-and-context.md` for why. Never use `run_llm=False` — let the system prompt control verbosity.
+Tool results ALWAYS go back to the LLM via `result_callback`. The system prompt controls whether the agent speaks about them. See `tool-results-and-context.md` for details.

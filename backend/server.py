@@ -39,7 +39,7 @@ from glarvis.context_injector import BoardContextInjector
 from glarvis.orchestrator import Orchestrator
 from glarvis.response_capture import ResponseCapture
 from glarvis.task_manager import TaskManager
-from glarvis.tools.examples import GetTime, ListDirectory, ListTools, SearchFiles
+from glarvis.tools.examples import DebugContext, GetTime, ListDirectory, ListTools, SearchFiles, WriteBoard
 from glarvis.transcript_capture import TranscriptCapture
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
@@ -58,6 +58,7 @@ Rules:
 - Don't read out lists, file contents, or structured data — post to the board instead.
 - If you post to the board in response to the user, let them know briefly — "it's on the board", "take a look", etc. If nothing was asked, you don't need to announce it.
 - If the user explicitly asks you to read or explain something, speak it fully.
+- You can call multiple tools in sequence. Don't tell the user you can only do one thing at a time.
 - No markdown, bullets, or special characters. This is spoken aloud.
 """
 
@@ -199,9 +200,10 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     orchestrator = Orchestrator(task_manager, llm, temp_context, pipeline_task=None)
 
     # Register all tools
-    for tool in [GetTime(), ListDirectory(), SearchFiles()]:
+    for tool in [GetTime(), ListDirectory(), SearchFiles(), WriteBoard()]:
         orchestrator.register(tool)
     orchestrator.register(ListTools(orchestrator))
+    orchestrator.register(DebugContext(orchestrator))
 
     # Now build the real context with tools schema
     context = LLMContext(
@@ -263,6 +265,8 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[Server] Client connected to WebRTC")
+        # Post available tools to the board on connect
+        await orchestrator.broadcast_welcome()
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
