@@ -40,6 +40,7 @@ from glarvis.orchestrator import Orchestrator
 from glarvis.response_capture import ResponseCapture
 from glarvis.task_manager import TaskManager
 from glarvis.tools.examples import DebugContext, EnterSession, ExitSession, GetTime, ListDirectory, ListTools, SearchFiles, WriteBoard
+from glarvis.tools.multi_choice import MultiChoiceSession
 from glarvis.transcript_capture import TranscriptCapture
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
@@ -115,6 +116,12 @@ async def websocket_endpoint(websocket: WebSocket):
                     await _inject_user_text(msg["text"].strip())
                 elif msg.get("type") == "context_toggle" and msg.get("task_id"):
                     _handle_context_toggle(msg["task_id"])
+                elif msg.get("type") == "popup_action":
+                    await _handle_popup_action(
+                        msg.get("tool_name", ""),
+                        msg.get("action", ""),
+                        msg.get("data", {}),
+                    )
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
@@ -128,6 +135,14 @@ def _handle_context_toggle(task_id: str):
         logger.warning("[Server] No active orchestrator for context toggle")
         return
     active_orchestrator.toggle_context(task_id)
+
+
+async def _handle_popup_action(tool_name: str, action: str, data: dict):
+    """Route a popup action to the orchestrator."""
+    if not active_orchestrator:
+        logger.warning("[Server] No active orchestrator for popup action")
+        return
+    await active_orchestrator.handle_popup_action(tool_name, action, data)
 
 
 async def _inject_user_text(text: str):
@@ -211,7 +226,7 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     orchestrator = Orchestrator(task_manager, llm, temp_context, pipeline_task=None)
 
     # Register all tools
-    for tool in [GetTime(), ListDirectory(), SearchFiles(), WriteBoard()]:
+    for tool in [GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), MultiChoiceSession()]:
         orchestrator.register(tool)
     orchestrator.register(ListTools(orchestrator))
     orchestrator.register(DebugContext(orchestrator))

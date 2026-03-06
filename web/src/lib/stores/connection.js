@@ -10,7 +10,68 @@ export const transcript = writable([]);
 export const boardStream = writable([]);    // array of {author, content, timestamp}
 export const boardFocused = writable(null);  // currently focused item index
 
+export const pendingPopupStore = writable(null); // {popupType, toolName, data, url} when blocked
+
 let ws = null;
+let pendingPopup = null;
+
+// ── Popup management ─────────────────────────────────────────────────────────
+
+const openPopups = new Map(); // tool_name → Window
+
+// Listen for postMessage from popup windows
+window.addEventListener('message', (event) => {
+  if (event.data?.type === 'popup_action') {
+    sendPopupAction(event.data.tool_name, event.data.action, event.data.data || {});
+  }
+});
+
+export function openPopup(popupType, toolName, data) {
+  closePopup(toolName);
+  const dataStr = encodeURIComponent(JSON.stringify({ popupType, toolName, data }));
+  const url = `/popup.html#${dataStr}`;
+  console.log('[Popup] Opening:', popupType, toolName, url);
+  const win = window.open(url, `popup_${toolName}`, 'width=420,height=360,menubar=no,toolbar=no,status=no');
+  if (win) {
+    console.log('[Popup] Window opened successfully');
+    openPopups.set(toolName, win);
+  } else {
+    console.warn('[Popup] window.open() returned null — likely blocked by browser popup blocker');
+    // Queue for user-gesture-triggered open
+    pendingPopup = { popupType, toolName, data, url };
+    pendingPopupStore.set(pendingPopup);
+  }
+}
+
+/** Call from a click handler to retry a blocked popup. */
+export function openPendingPopup() {
+  if (!pendingPopup) return;
+  const { url, toolName } = pendingPopup;
+  const win = window.open(url, `popup_${toolName}`, 'width=420,height=360,menubar=no,toolbar=no,status=no');
+  if (win) {
+    console.log('[Popup] Opened via user gesture');
+    openPopups.set(toolName, win);
+  }
+  pendingPopup = null;
+  pendingPopupStore.set(null);
+}
+
+export function closePopup(toolName) {
+  const win = openPopups.get(toolName);
+  if (win && !win.closed) win.close();
+  openPopups.delete(toolName);
+  // Clear pending popup if it matches
+  if (pendingPopup?.toolName === toolName) {
+    pendingPopup = null;
+    pendingPopupStore.set(null);
+  }
+}
+
+function sendPopupAction(toolName, action, data) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'popup_action', tool_name: toolName, action, data }));
+  }
+}
 let pc = null;
 let localStream = null;
 let pcId = null;
@@ -47,6 +108,12 @@ export function connectWebSocket() {
         break;
       case 'agent_state':
         agentState.set(msg.state);
+        break;
+      case 'popup_open':
+        openPopup(msg.popup_type, msg.tool_name, msg.data);
+        break;
+      case 'popup_close':
+        closePopup(msg.tool_name);
         break;
     }
   };
@@ -193,6 +260,10 @@ function clearSessionState() {
   boardFocused.set(null);
   tasks.set([]);
   agentState.set('idle');
+  // Close all open popups
+  for (const [toolName] of openPopups) {
+    closePopup(toolName);
+  }
 }
 
 export function disconnect() {

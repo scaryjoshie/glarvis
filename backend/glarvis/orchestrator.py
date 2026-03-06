@@ -278,6 +278,34 @@ class Orchestrator:
 
         self.llm.register_function(tool_name, _handler, cancel_on_interruption=True)
 
+    # ── Popup action routing ─────────────────────────────────────────────────
+
+    async def handle_popup_action(self, tool_name: str, action: str, data: dict):
+        """Handle a direct action from a popup window (user clicked something).
+
+        Finds the active session matching tool_name and routes to handle_context_call.
+        """
+        for task_id, state in self._active_contexts.items():
+            if isinstance(state.tool, SessionTool) and state.tool.name == tool_name:
+                try:
+                    result = await state.tool.handle_context_call(action, **data)
+                except Exception as e:
+                    logger.error(f"[Orchestrator] Popup action {action} on {tool_name} failed: {e}")
+                    return
+
+                if result and result.board_content:
+                    await self.broadcast_board_post(tool_name, result.board_content)
+
+                await self.broadcast_transcript(
+                    "user", action,
+                    entry_type="popup_action", tool=tool_name,
+                    tool_args=data,
+                    tool_result=result.result if result else None,
+                )
+                return
+
+        logger.warning(f"[Orchestrator] No active session for popup action: {tool_name}")
+
     # ── Tool execution ───────────────────────────────────────────────────────
 
     async def _execute_tool(self, tool_name: str, params: FunctionCallParams) -> TaskResult:
