@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
-import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
-import { listen } from '@tauri-apps/api/event';
+import { WebviewWindow, getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { listen, emitTo } from '@tauri-apps/api/event';
 
 export const connectionState = writable('disconnected'); // disconnected | connecting | connected
 export const agentState = writable('idle'); // idle | listening | thinking | speaking
@@ -24,36 +24,53 @@ let ws = null;
 // ── Popup management (Tauri native windows) ──────────────────────────────────
 
 const openPopups = new Map(); // tool_name → WebviewWindow
+const pendingPopupData = new Map(); // label → data (held until popup requests it)
+
+// Popup requests its data after JS loads
+listen('popup-request-data', async (event) => {
+  const { label } = event.payload;
+  const data = pendingPopupData.get(label);
+  if (data) {
+    await emitTo(label, 'popup-data', data);
+    pendingPopupData.delete(label);
+  }
+});
 
 // Listen for popup actions from overlay windows via Tauri events
 listen('popup-action', (event) => {
   const { tool_name, action, data } = event.payload;
-  sendPopupAction(tool_name, action, data || {});
+  if (action === 'board_reply' && data?.message) {
+    sendText(data.message);
+  } else {
+    sendPopupAction(tool_name, action, data || {});
+  }
 });
 
 export async function openPopup(popupType, toolName, data) {
   await closePopup(toolName);
-  const dataStr = encodeURIComponent(JSON.stringify({ popupType, toolName, data }));
-  const url = `popup.html#${dataStr}`;
+  const routeStr = encodeURIComponent(JSON.stringify({ popupType, toolName }));
   const label = `popup_${toolName}`;
 
-  // Scale height to content: ~50px per option + 120px for prompt/buttons/padding
+  // Scale height to content: ~49px per option + prompt(45) + bottom row(46) + popup padding(16)
   const optionCount = data?.options?.length || 3;
-  const height = Math.min(Math.max(optionCount * 50 + 120, 200), 600);
+  const height = Math.min(optionCount * 49 + 120, 640);
 
   console.log('[Popup] Opening Tauri window:', popupType, toolName);
   const overlay = new WebviewWindow(label, {
-    url,
+    url: `popup.html#${routeStr}`,
     title: 'Minerva',
-    width: 420,
+    width: 520,
     height,
     decorations: false,
-    transparent: true,
     alwaysOnTop: true,
     center: true,
     resizable: false,
     skipTaskbar: true,
+    focus: true,
   });
+
+  pendingPopupData.set(label, data);
+  overlay.once('tauri://created', () => overlay.setFocus());
 
   openPopups.set(toolName, overlay);
 }
@@ -64,6 +81,42 @@ export async function closePopup(toolName) {
     try { await win.close(); } catch {}
   }
   openPopups.delete(toolName);
+}
+
+async function showBoardNotifyIfUnfocused(author, content) {
+  try {
+    const focused = await getCurrentWebviewWindow().isFocused();
+    if (focused) return;
+  } catch {
+    console.warn('[BoardNotify] Focus check failed, assuming unfocused');
+  }
+
+  try {
+    const label = 'popup_board_notify';
+    const routeStr = encodeURIComponent(JSON.stringify({
+      popupType: 'board_notify',
+      toolName: 'board_notify',
+    }));
+    await closePopup('board_notify');
+    const overlay = new WebviewWindow(label, {
+      url: `popup.html#${routeStr}`,
+      title: 'Minerva',
+      width: 720,
+      height: 420,
+      decorations: false,
+      alwaysOnTop: true,
+      x: Math.round(screen.width / 2 - 360),
+      y: 40,
+      resizable: true,
+      skipTaskbar: true,
+      focus: true,
+    });
+    pendingPopupData.set(label, { author, content });
+    overlay.once('tauri://created', () => overlay.setFocus());
+    openPopups.set('board_notify', overlay);
+  } catch (e) {
+    console.warn('[BoardNotify] Failed to open popup:', e);
+  }
 }
 
 function sendPopupAction(toolName, action, data) {
@@ -101,6 +154,9 @@ export function connectWebSocket() {
           boardFocused.set(next.length - 1);
           return next;
         });
+        if (msg.notify) {
+          showBoardNotifyIfUnfocused(msg.author, msg.content);
+        }
         break;
       case 'transcript_add':
         transcript.update(t => [...t, msg.entry]);
@@ -276,17 +332,16 @@ export function sendContextToggle(taskId) {
   }
 }
 
-function clearSessionState() {
+async function clearSessionState() {
   transcript.set([]);
   boardStream.set([]);
   boardFocused.set(null);
   tasks.set([]);
   agentState.set('idle');
   voiceMuted.set(false);
-  // Close all open popups
-  for (const [toolName] of openPopups) {
-    closePopup(toolName);
-  }
+  // Close all open popups — snapshot keys first to avoid mutating Map during iteration
+  const popupKeys = [...openPopups.keys()];
+  await Promise.all(popupKeys.map(toolName => closePopup(toolName)));
 }
 
 export function disconnect() {

@@ -1,32 +1,16 @@
-"""FastAPI server — serves WebRTC signaling, WebSocket for UI updates,
-and runs the Pipecat voice pipeline."""
+"""FastAPI server — WebRTC signaling, WebSocket for UI updates."""
 
 import asyncio
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
 from loguru import logger
-
-from pipecat.adapters.schemas.tools_schema import ToolsSchema
-from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.audio.vad.vad_analyzer import VADParams
-from pipecat.pipeline.pipeline import Pipeline
+from pipecat.frames.frames import TranscriptionFrame
 from pipecat.pipeline.runner import PipelineRunner
-from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.llm_context import LLMContext
-from pipecat.processors.aggregators.llm_response_universal import (
-    LLMContextAggregatorPair,
-    LLMUserAggregatorParams,
-)
-from pipecat.services.anthropic.llm import AnthropicLLMService
-from pipecat.services.cartesia.tts import CartesiaTTSService, GenerationConfig
-from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import SmallWebRTCConnection
 from pipecat.transports.smallwebrtc.request_handler import (
@@ -35,68 +19,23 @@ from pipecat.transports.smallwebrtc.request_handler import (
 )
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
-from glarvis.system import SystemMonitor
-from glarvis.context_injector import BoardContextInjector
-from glarvis.input_interceptor import InputInterceptor
-from glarvis.mute_gate import MuteGate
-from glarvis.orchestrator import Orchestrator
-from glarvis.response_capture import ResponseCapture
-from glarvis.task_manager import TaskManager
-from glarvis.tools.examples import DebugContext, EnterSession, ExitSession, GetTime, ListDirectory, ListTools, Mute, SearchFiles, WriteBoard
-from glarvis.tools.multi_choice import MultiChoiceSession
-from glarvis.tools.system_tools import FocusWindow, OpenProgram, ReadFile, SearchPrograms
-from glarvis.transcript_capture import TranscriptCapture
+from glarvis.pipeline import PipelineSession, build_session
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
-SYSTEM_PROMPT = """\
-You are Minerva, a deeply intelligent desktop voice assistant. Think efficient coworker, not chatbot.
-
-Rules:
-- Keep responses SHORT. One sentence max for most things. "Yep", "got it", "on it" are fine responses.
-- If the user is just chatting, chat back briefly. Don't over-explain or monologue.
-- Never list your capabilities or offer help unprompted. The user knows what you can do.
-- NEVER read lists aloud. Not windows, not files, not programs, not options. Post to board or use multi_choice instead.
-- Short answers (a sentence or less) can be spoken. Anything longer goes on the board.
-- If you post to the board in response to the user, let them know briefly — "it's on the board", "take a look", etc.
-- If the user explicitly asks you to read or explain something, speak it fully.
-- No markdown, bullets, or special characters. This is spoken aloud.
-- You have live System State showing open windows, focused window, clipboard, and time. Use it — don't say you can't see what's open.
-
-Tools:
-- You can call multiple tools in one turn and chain them. Don't say you can only do one thing at a time.
-- Some tools start sessions. While a session is active, extra context tools appear in your tool list (listed in the system state below). USE them — they are real tools you can call, not suggestions.
-- CRITICAL: When a session is active (like show_choices), the user's responses go through its context tools. If show_choices is active and the user says a number or name, call select_option — NOT focus_window or any other tool. The context tool handles it.
-- If the user wants something not in the listed options, use select_other with their request.
-- After a selection is made, continue with whatever task prompted the choice. Don't stop.
-
-Disambiguation — ALWAYS use show_choices when there are multiple options:
-- Multiple windows match (e.g. two Notepad instances) → show_choices with the window titles
-- Multiple programs match a search → show_choices with the program names
-- Any time the user needs to pick from a list → show_choices, never read options aloud
-
-Common workflows (call these tools in sequence):
-- "Open X" / "Go to X": Check the window list first. If exactly one match, focus_window(id). If multiple matches, show_choices. If not open, search_programs("X") → open_program(exact_name).
-- "Show me file X": read_file(path) posts to board.
-"""
-
 app = FastAPI()
 request_handler = SmallWebRTCRequestHandler()
 
-# ── WebSocket connections for UI updates ──────────────────────────────────────
+# ── Session state ─────────────────────────────────────────────────────────────
 
 ws_clients: set[WebSocket] = set()
-active_pipeline_task: PipelineTask | None = None
-active_orchestrator: Orchestrator | None = None
-active_mute_gate: MuteGate | None = None
-active_system_monitor: SystemMonitor | None = None
+session: PipelineSession | None = None
 
 
 async def broadcast(msg: dict):
-    """Send a message to all connected WebSocket clients."""
     data = json.dumps(msg)
     disconnected = set()
     for client in ws_clients:
@@ -108,6 +47,17 @@ async def broadcast(msg: dict):
         ws_clients.discard(client)
 
 
+@app.on_event("shutdown")
+async def shutdown():
+    global session
+    logger.info("[Server] Shutting down...")
+    if session:
+        await session.teardown()
+        session = None
+
+
+# ── WebSocket ─────────────────────────────────────────────────────────────────
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
@@ -118,20 +68,7 @@ async def websocket_endpoint(websocket: WebSocket):
             raw = await websocket.receive_text()
             try:
                 msg = json.loads(raw)
-                if msg.get("type") == "user_text" and msg.get("text", "").strip():
-                    await _inject_user_text(msg["text"].strip())
-                elif msg.get("type") == "context_toggle" and msg.get("task_id"):
-                    _handle_context_toggle(msg["task_id"])
-                elif msg.get("type") == "soft_unmute":
-                    await _handle_soft_unmute()
-                elif msg.get("type") == "hard_mute":
-                    _handle_hard_mute(msg.get("muted", False))
-                elif msg.get("type") == "popup_action":
-                    await _handle_popup_action(
-                        msg.get("tool_name", ""),
-                        msg.get("action", ""),
-                        msg.get("data", {}),
-                    )
+                await _handle_ws_message(msg)
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
@@ -139,46 +76,32 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"[WS] Client disconnected ({len(ws_clients)} total)")
 
 
-def _handle_context_toggle(task_id: str):
-    """Toggle session context when user clicks a session chip."""
-    if not active_orchestrator:
-        logger.warning("[Server] No active orchestrator for context toggle")
-        return
-    active_orchestrator.toggle_context(task_id)
-
-
-async def _handle_soft_unmute():
-    """Clear the voice gate when user clicks unmute from soft-muted state."""
-    if active_mute_gate and active_mute_gate.muted:
-        await active_mute_gate.set_muted(False)
-
-
-def _handle_hard_mute(muted: bool):
-    """Track client-side hard mute state."""
-    if active_mute_gate:
-        active_mute_gate.hard_muted = muted
-        logger.info(f"[Server] Hard mute: {muted}")
-
-
-async def _handle_popup_action(tool_name: str, action: str, data: dict):
-    """Route a popup action to the orchestrator."""
-    if not active_orchestrator:
-        logger.warning("[Server] No active orchestrator for popup action")
-        return
-    await active_orchestrator.handle_popup_action(tool_name, action, data)
+async def _handle_ws_message(msg: dict):
+    msg_type = msg.get("type")
+    if msg_type == "user_text" and msg.get("text", "").strip():
+        await _inject_user_text(msg["text"].strip())
+    elif msg_type == "context_toggle" and msg.get("task_id"):
+        if session and session.orchestrator:
+            session.orchestrator.toggle_context(msg["task_id"])
+    elif msg_type == "soft_unmute":
+        if session and session.mute_gate and session.mute_gate.muted:
+            await session.mute_gate.set_muted(False)
+    elif msg_type == "hard_mute":
+        if session and session.mute_gate:
+            session.mute_gate.hard_muted = msg.get("muted", False)
+    elif msg_type == "popup_action":
+        if session and session.orchestrator:
+            await session.orchestrator.handle_popup_action(
+                msg.get("tool_name", ""), msg.get("action", ""), msg.get("data", {}),
+            )
 
 
 async def _inject_user_text(text: str):
-    """Inject typed text into the pipeline as if the user spoke it."""
-    from pipecat.frames.frames import TranscriptionFrame
-
-    if not active_pipeline_task:
-        logger.warning("[Server] No active pipeline to inject text into")
+    if not session or not session.task:
         return
-
     logger.info(f'[Server] Injecting user text: "{text}"')
     frame = TranscriptionFrame(text=text, user_id="user", timestamp=str(time.time()))
-    await active_pipeline_task.queue_frame(frame)
+    await session.task.queue_frame(frame)
 
 
 # ── WebRTC signaling ─────────────────────────────────────────────────────────
@@ -186,8 +109,7 @@ async def _inject_user_text(text: str):
 @app.post("/webrtc/offer")
 async def webrtc_offer(request: dict):
     req = SmallWebRTCRequest.from_dict(request)
-    answer = await request_handler.handle_web_request(req, on_new_connection)
-    return answer
+    return await request_handler.handle_web_request(req, on_new_connection)
 
 
 @app.post("/webrtc/ice")
@@ -203,7 +125,7 @@ async def webrtc_ice(request: dict):
             sdp_mline_index=c["sdpMLineIndex"],
         )
         for c in request.get("candidates", [])
-        if c.get("candidate")  # filter empty end-of-candidates signals
+        if c.get("candidate")
     ]
     patch = SmallWebRTCPatchRequest(pc_id=request["pc_id"], candidates=candidates)
     await request_handler.handle_patch_request(patch)
@@ -211,7 +133,14 @@ async def webrtc_ice(request: dict):
 
 
 async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
-    """Called when a new WebRTC peer connects. Sets up and runs the pipeline in the background."""
+    global session
+
+    # Tear down previous session
+    if session:
+        logger.info("[Server] Cancelling previous pipeline before new connection")
+        await session.teardown()
+        session = None
+
     logger.info("[Server] New WebRTC connection, building pipeline...")
 
     transport = SmallWebRTCTransport(
@@ -223,137 +152,23 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
         ),
     )
 
-    stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
-
-    tts = CartesiaTTSService(
-        api_key=os.getenv("CARTESIA_API_KEY"),
-        voice_id=os.getenv("CARTESIA_VOICE_ID", "87748186-23bb-4158-a1eb-332911b0b708"),
-        params=CartesiaTTSService.InputParams(
-            generation_config=GenerationConfig(
-                speed=1.25,
-            )
-        ),
-    )
-
-    llm = AnthropicLLMService(
-        api_key=os.getenv("ANTHROPIC_API_KEY"),
-        # model="claude-haiku-4-5-20251001",
-        model="claude-sonnet-4-6"
-    )
-
-    # Set up tools and orchestrator
-    task_manager = TaskManager()
-
-    # Build orchestrator first so ListTools can reference it
-    # We need a temporary context to construct the orchestrator, then rebuild with tools
-    temp_context = LLMContext(messages=[{"role": "system", "content": SYSTEM_PROMPT}])
-    orchestrator = Orchestrator(task_manager, llm, temp_context, pipeline_task=None)
-
-    # Register all tools
-    mute_gate = MuteGate(broadcast=broadcast)
-
-    # Start system monitor early so tools can reference it
-    system_monitor = SystemMonitor(interval=2.0)
-    system_monitor.start()
-
-    for tool in [
-        GetTime(), ListDirectory(), SearchFiles(), WriteBoard(),
-        MultiChoiceSession(), Mute(mute_gate),
-        FocusWindow(system_monitor), SearchPrograms(system_monitor),
-        OpenProgram(system_monitor), ReadFile(),
-    ]:
-        orchestrator.register(tool)
-    orchestrator.register(ListTools(orchestrator))
-    orchestrator.register(DebugContext(orchestrator))
-    orchestrator.register(EnterSession(orchestrator))
-    orchestrator.register(ExitSession(orchestrator))
-
-    # Now build the real context with tools schema
-    context = LLMContext(
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}],
-        tools=orchestrator.get_tools_schema(),
-    )
-    orchestrator.context = context
-    orchestrator._original_system_message = SYSTEM_PROMPT
-
-    user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
-        context,
-        user_params=LLMUserAggregatorParams(
-            vad_analyzer=SileroVADAnalyzer(
-                params=VADParams(
-                    confidence=0.8,
-                    start_secs=0.2,
-                    stop_secs=0.8,
-                    min_volume=0.6,
-                )
-            ),
-        ),
-    )
-
-    # Wire up UI broadcasting
-    orchestrator.set_broadcast(broadcast)
-
-    transcript_capture = TranscriptCapture(orchestrator)
-    input_interceptor = InputInterceptor(orchestrator)
-    injector = BoardContextInjector(orchestrator)
-    response_capture = ResponseCapture(orchestrator)
-
-    pipeline = Pipeline(
-        [
-            transport.input(),
-            stt,
-            mute_gate,
-            transcript_capture,
-            input_interceptor,
-            user_aggregator,
-            injector,
-            llm,
-            response_capture,
-            tts,
-            transport.output(),
-            assistant_aggregator,
-        ]
-    )
-
-    task = PipelineTask(
-        pipeline,
-        params=PipelineParams(
-            enable_metrics=True,
-            enable_usage_metrics=True,
-        ),
-    )
-
-    orchestrator.pipeline_task = task
-    orchestrator.system_monitor = system_monitor
-    input_interceptor.set_pipeline_task(task)
-
-    global active_pipeline_task, active_orchestrator, active_mute_gate, active_system_monitor
-    active_pipeline_task = task
-    active_orchestrator = orchestrator
-    active_mute_gate = mute_gate
-    active_system_monitor = system_monitor
+    session = build_session(transport, broadcast)
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[Server] Client connected to WebRTC")
-        # Post available tools to the board on connect
-        await orchestrator.broadcast_welcome()
+        await session.orchestrator.broadcast_welcome()
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        global active_pipeline_task, active_orchestrator, active_mute_gate, active_system_monitor
+        global session
         logger.info("[Server] Client disconnected from WebRTC")
-        if active_system_monitor:
-            active_system_monitor.stop()
-        active_pipeline_task = None
-        active_orchestrator = None
-        active_mute_gate = None
-        active_system_monitor = None
-        await task.cancel()
+        if session:
+            await session.teardown()
+            session = None
 
-    # Run pipeline in background so the HTTP response returns immediately
     runner = PipelineRunner(handle_sigint=False)
-    asyncio.create_task(runner.run(task))
+    asyncio.create_task(runner.run(session.task))
 
 
 if __name__ == "__main__":

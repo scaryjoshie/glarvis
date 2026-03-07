@@ -1,6 +1,6 @@
 <script>
   import { emit } from '@tauri-apps/api/event';
-  import { getCurrentWindow, Effect } from '@tauri-apps/api/window';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onMount } from 'svelte';
 
   export let prompt = '';
@@ -13,10 +13,9 @@
 
   onMount(async () => {
     try {
-      const win = getCurrentWindow();
-      await win.setEffects({ effects: [Effect.Acrylic], color: [24, 24, 27, 120] });
+      await getCurrentWindow().setFocus();
     } catch (e) {
-      console.warn('[Popup] Could not set acrylic effect:', e);
+      console.warn('[Popup] Could not focus:', e);
     }
   });
 
@@ -94,33 +93,40 @@
 
 <style>
   :global(html), :global(body) {
-    background: transparent;
+    background: transparent !important;
     margin: 0;
     padding: 0;
+    height: 100%;
+  }
+
+  :global(#popup) {
+    height: 100%;
   }
 
   .popup {
-    padding: 20px;
-    max-height: 100vh;
+    padding: 8px 0;
+    height: 100%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    justify-content: center;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     color: #e4e4e7;
     overflow: hidden;
+    background: #0a0a0c;
+    border-radius: 0;
   }
 
   .prompt {
-    font-size: 14px;
-    margin: 0 0 14px;
+    font-size: 13px;
+    margin: 0;
+    padding: 12px 20px;
     color: #a1a1aa;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
   }
 
   .options {
     display: flex;
     flex-direction: column;
-    gap: 6px;
     overflow-y: auto;
     flex: 1;
     min-height: 0;
@@ -129,41 +135,45 @@
   .option {
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.06);
+    gap: 14px;
+    padding: 14px 20px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
     color: #e4e4e7;
-    font-size: 13px;
+    font-size: 14px;
     cursor: pointer;
-    transition: border-color 0.15s, background 0.15s;
+    transition: background 0.1s;
     text-align: left;
     font-family: inherit;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  }
+
+  .option:last-child {
+    border-bottom: none;
   }
 
   .option:hover {
-    border-color: rgba(59, 130, 246, 0.5);
-    background: rgba(59, 130, 246, 0.12);
+    background: rgba(255, 255, 255, 0.06);
   }
 
   .number {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
     background: rgba(255, 255, 255, 0.08);
     font-size: 11px;
     font-weight: 600;
     flex-shrink: 0;
-    color: #a1a1aa;
+    color: #71717a;
   }
 
   .option:hover .number {
-    background: rgba(59, 130, 246, 0.2);
-    color: #3b82f6;
+    background: rgba(255, 255, 255, 0.12);
+    color: #a1a1aa;
   }
 
   .label {
@@ -173,56 +183,56 @@
   .bottom-row {
     display: flex;
     gap: 8px;
-    margin-top: 14px;
+    padding: 10px 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
   }
 
   .other-btn {
     flex: 1;
-    padding: 7px 16px;
-    border: 1px solid rgba(139, 92, 246, 0.25);
+    padding: 8px 16px;
+    border: none;
     border-radius: 8px;
-    background: rgba(139, 92, 246, 0.08);
-    color: #a78bfa;
+    background: rgba(255, 255, 255, 0.06);
+    color: #a1a1aa;
     font-size: 12px;
     cursor: pointer;
     font-family: inherit;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.1s;
   }
 
   .other-btn:hover {
-    background: rgba(139, 92, 246, 0.15);
-    border-color: rgba(139, 92, 246, 0.4);
+    background: rgba(255, 255, 255, 0.1);
   }
 
   .dismiss-btn {
-    padding: 7px 16px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 8px 16px;
+    border: none;
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgba(255, 255, 255, 0.06);
     color: #71717a;
     font-size: 12px;
     cursor: pointer;
     font-family: inherit;
-    transition: color 0.15s, border-color 0.15s;
+    transition: color 0.1s;
   }
 
   .dismiss-btn:hover {
     color: #a1a1aa;
-    border-color: rgba(255, 255, 255, 0.12);
   }
 
   .other-input {
     display: flex;
     gap: 8px;
-    margin-top: 14px;
+    padding: 10px 20px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
   }
 
   .other-input input {
     flex: 1;
     padding: 8px 12px;
-    border: 1px solid rgba(139, 92, 246, 0.3);
+    border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    background: rgba(255, 255, 255, 0.04);
     color: #e4e4e7;
     font-size: 13px;
     font-family: inherit;
@@ -231,7 +241,7 @@
   }
 
   .other-input input:focus {
-    border-color: #8b5cf6;
+    border-color: rgba(255, 255, 255, 0.25);
   }
 
   .other-input input::placeholder {
@@ -240,20 +250,19 @@
 
   .submit-btn {
     padding: 8px 16px;
-    border: 1px solid rgba(139, 92, 246, 0.35);
+    border: none;
     border-radius: 8px;
-    background: rgba(139, 92, 246, 0.12);
-    color: #a78bfa;
+    background: rgba(255, 255, 255, 0.08);
+    color: #a1a1aa;
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     font-family: inherit;
-    transition: background 0.15s, border-color 0.15s;
+    transition: background 0.1s;
   }
 
   .submit-btn:hover:not(:disabled) {
-    background: rgba(139, 92, 246, 0.22);
-    border-color: rgba(139, 92, 246, 0.5);
+    background: rgba(255, 255, 255, 0.12);
   }
 
   .submit-btn:disabled {

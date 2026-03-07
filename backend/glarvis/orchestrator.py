@@ -47,6 +47,11 @@ class _OrchestratorToolHandle(ToolHandle):
             "type": "popup_close", "tool_name": self._name,
         })
 
+    async def close_named_popup(self, name: str) -> None:
+        await self._orch._broadcast_msg({
+            "type": "popup_close", "tool_name": name,
+        })
+
 
 class Orchestrator:
     def __init__(
@@ -85,12 +90,13 @@ class Orchestrator:
         if self._broadcast:
             await self._broadcast(msg)
 
-    async def broadcast_board_post(self, author: str, content: str) -> int:
+    async def broadcast_board_post(self, author: str, content: str, notify: bool = False) -> int:
         index = self._board_post_index
         self._board_post_index += 1
         await self._broadcast_msg({
             "type": "board_post", "author": author,
             "content": content, "timestamp": time.time(),
+            "notify": notify,
         })
         return index
 
@@ -204,7 +210,7 @@ class Orchestrator:
             result = TaskResult(result=f"Error: {e}")
 
         if result and result.board_content:
-            await self.broadcast_board_post(self._author_for(tool_name), result.board_content)
+            await self.broadcast_board_post(self._author_for(tool_name), result.board_content, notify=result.notify)
 
         await self.broadcast_transcript(
             "assistant", tool_name, entry_type="tool_result",
@@ -337,12 +343,11 @@ class Orchestrator:
 
         Returns a TaskResult if a session claimed the input, None otherwise.
         """
-        for task_id, state in self._active_contexts.items():
+        for task_id, state in list(self._active_contexts.items()):
             if isinstance(state.tool, SessionTool):
                 result = await state.tool.intercept(text)
                 if result is not None:
                     logger.info(f"[Orchestrator] Input intercepted by {state.tool.name}: {text!r}")
-                    # Broadcast to transcript so the UI shows what happened
                     await self.broadcast_transcript(
                         "user", text, entry_type="speech",
                     )
@@ -352,6 +357,8 @@ class Orchestrator:
                         "assistant", state.tool.name, entry_type="tool_result",
                         tool=state.tool.name, tool_result=result.result,
                     )
+                    if state.tool.is_done:
+                        self.exit_context(task_id)
                     return result
         return None
 
@@ -384,11 +391,11 @@ class Orchestrator:
         if task_id in self._active_contexts:
             self.exit_context(task_id)
 
-    def _on_board_post(self, task_id: str, author: str, content: str):
+    def _on_board_post(self, task_id: str, author: str, content: str, notify: bool = False):
         if not self._broadcast:
             return
         async def _post():
-            index = await self.broadcast_board_post(author, content)
+            index = await self.broadcast_board_post(author, content, notify=notify)
             state = self._find_task(task_id)
             if state:
                 state.board_post_index = index

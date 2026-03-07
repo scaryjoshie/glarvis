@@ -22,6 +22,7 @@ _NOISE_TITLES = {
     "program manager",
     "msctfime ui",
     "default ime",
+    "popuphost",
 }
 
 

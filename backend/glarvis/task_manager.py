@@ -67,7 +67,7 @@ class TaskManager:
         # Callbacks (set by orchestrator)
         self.on_notification: Callable[[Notification], Any] | None = None
         self.on_change: Callable[[], Any] | None = None
-        self.on_board_post: Callable[[str, str, str], Any] | None = None  # (task_id, author, content)
+        self.on_board_post: Callable[[str, str, str, bool], Any] | None = None  # (task_id, author, content, notify)
         self.on_finalize: Callable[[str], Any] | None = None  # (task_id)
 
     def _next_id(self) -> str:
@@ -135,7 +135,7 @@ class TaskManager:
         if tool.display in ("board", "both") and result and result.board_content:
             logger.info(f"[TaskManager] {tool.name} posted to board")
             if self.on_board_post:
-                self.on_board_post(task_id, tool.name, result.board_content)
+                self.on_board_post(task_id, tool.name, result.board_content, result.notify)
 
         # Notification routing
         if tool.notification == "silent":

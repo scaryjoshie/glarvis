@@ -6,7 +6,6 @@ Sits after TranscriptCapture, before UserAggregator in the pipeline.
 
 from __future__ import annotations
 
-import time
 from typing import TYPE_CHECKING
 
 from loguru import logger
@@ -15,24 +14,19 @@ from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 if TYPE_CHECKING:
     from glarvis.orchestrator import Orchestrator
-    from pipecat.pipeline.task import PipelineTask
 
 
 class InputInterceptor(FrameProcessor):
     """Checks if active session contexts want to claim user input.
 
-    If a session's intercept() returns a result, the transcription frame
-    is consumed (not forwarded to the LLM). The result is injected back
-    as a user message so the LLM knows what happened and can follow up.
+    If a session's intercept() returns a result, the frame's text is
+    replaced with the result guide and pushed downstream normally.
+    The natural VAD stop event that follows speech triggers the LLM turn.
     """
 
     def __init__(self, orchestrator: Orchestrator):
         super().__init__()
         self._orchestrator = orchestrator
-        self._pipeline_task: PipelineTask | None = None
-
-    def set_pipeline_task(self, task: PipelineTask):
-        self._pipeline_task = task
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
@@ -40,15 +34,11 @@ class InputInterceptor(FrameProcessor):
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
             result = await self._orchestrator.try_intercept(frame.text)
             if result is not None:
-                logger.info(f"[InputInterceptor] Consumed: {frame.text!r}")
-                # Inject the result as a user message so the LLM can follow up
-                if result.guide and self._pipeline_task:
-                    injected = TranscriptionFrame(
-                        text=f"[{result.guide}]",
-                        user_id="intercepted",
-                        timestamp=str(time.time()),
-                    )
-                    await self._pipeline_task.queue_frame(injected)
-                return  # consume the original frame
+                logger.info(f"[InputInterceptor] Intercepted: {frame.text!r} → {result.guide!r}")
+                if result.guide:
+                    # Replace the text and let it flow through naturally
+                    frame.text = f"[{result.guide}]"
+                    await self.push_frame(frame, direction)
+                return  # either pushed modified frame or consumed silently
 
         await self.push_frame(frame, direction)

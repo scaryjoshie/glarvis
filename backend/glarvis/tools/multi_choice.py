@@ -103,6 +103,10 @@ class MultiChoiceSession(SessionTool):
             return self._result
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
 
+    @property
+    def is_done(self) -> bool:
+        return self._done.is_set()
+
     async def intercept(self, text: str) -> TaskResult | None:
         """Catch number words and 'dismiss' before the LLM sees them."""
         cleaned = text.strip().lower().rstrip(".!?,")

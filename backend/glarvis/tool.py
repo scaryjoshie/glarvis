@@ -30,6 +30,7 @@ class TaskResult:
     result: Any = None  # raw data for LLM context
     guide: str | None = None  # natural language hint for the LLM
     board_content: str | None = None  # rich markdown for Board stream
+    notify: bool = False  # show as popup when main app not focused
 
 
 class ToolHandle:
@@ -49,6 +50,10 @@ class ToolHandle:
 
     async def close_popup(self) -> None:
         """Tell frontend to close this tool's popup."""
+        raise NotImplementedError
+
+    async def close_named_popup(self, name: str) -> None:
+        """Tell frontend to close a popup by name."""
         raise NotImplementedError
 
 
@@ -207,6 +212,11 @@ class SessionTool(AsyncTool):
     async def handle_context_call(self, tool_name: str, **kwargs) -> TaskResult:
         """Handle a call to one of this session's context tools."""
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
+
+    @property
+    def is_done(self) -> bool:
+        """Whether the session has resolved. Checked after intercept to auto-exit context."""
+        return False
 
     async def intercept(self, text: str) -> TaskResult | None:
         """Try to claim a user input before the LLM sees it.
