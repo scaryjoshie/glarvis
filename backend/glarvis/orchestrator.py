@@ -53,6 +53,8 @@ class _OrchestratorToolHandle(ToolHandle):
             "type": "popup_close", "tool_name": name,
         })
 
+    async def execute_tool(self, tool_name: str, **kwargs) -> TaskResult:
+        return await self._orch.execute_tool(tool_name, kwargs)
 
 class Orchestrator:
     def __init__(
@@ -200,6 +202,10 @@ class Orchestrator:
 
     async def _execute_tool(self, tool_name: str, params: FunctionCallParams) -> TaskResult:
         kwargs = dict(params.arguments)
+        return await self.execute_tool(tool_name, kwargs)
+
+    async def execute_tool(self, tool_name: str, kwargs: dict) -> TaskResult:
+        """Programmatically execute a tool, exactly as if the LLM called it."""
         await self.broadcast_transcript(
             "assistant", tool_name, entry_type="tool_call",
             tool=tool_name, tool_args=kwargs,

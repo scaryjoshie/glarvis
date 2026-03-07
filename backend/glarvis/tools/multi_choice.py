@@ -29,8 +29,23 @@ class MultiChoiceSession(SessionTool):
     parameters = {
         "options": {
             "type": "array",
-            "items": {"type": "string"},
-            "description": "List of options to choose from",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "The text to display to the user"},
+                    "action": {
+                        "type": "object",
+                        "description": "Optional shortcut action to execute immediately when chosen.",
+                        "properties": {
+                            "tool": {"type": "string", "description": "Name of the tool to execute"},
+                            "args": {"type": "object", "description": "Arguments for the tool"}
+                        },
+                        "required": ["tool"]
+                    }
+                },
+                "required": ["text"]
+            },
+            "description": "List of options to choose from. Can be simple strings or objects with an action.",
         },
         "prompt": {
             "type": "string",
@@ -43,13 +58,20 @@ class MultiChoiceSession(SessionTool):
     notification = "silent"  # LLM handles the response, not a raw TTS notification
 
     async def run(self, options=None, prompt="", **kwargs) -> TaskResult:
-        self._options = options or []
+        # Standardize options internally, but pass simple strings to popup
+        self._full_options = []
+        for opt in (options or []):
+            if isinstance(opt, dict):
+                self._full_options.append({"text": str(opt.get("text", "")), "action": opt.get("action")})
+            else:
+                self._full_options.append({"text": str(opt), "action": None})
+
         self._result: TaskResult | None = None
         self._done = asyncio.Event()
 
         await self.handle.open_popup("multi_choice", {
             "prompt": prompt,
-            "options": self._options,
+            "options": [opt["text"] for opt in self._full_options],
         })
 
         # Block until a choice is made or dismissed
@@ -81,13 +103,25 @@ class MultiChoiceSession(SessionTool):
     async def handle_context_call(self, tool_name: str, **kwargs) -> TaskResult:
         if tool_name == "select_option":
             n = kwargs.get("number", 0)
-            if 1 <= n <= len(self._options):
-                choice = self._options[n - 1]
+            if 1 <= n <= len(self._full_options):
+                choice = self._full_options[n - 1]
                 await self.handle.close_popup()
-                self._result = TaskResult(result=choice, guide=f"User selected: {choice}")
+                
+                action = choice.get("action")
+                if action and isinstance(action, dict) and "tool" in action:
+                    # Execute shortcut action immediately
+                    args = action.get("args", {})
+                    action_result = await self.handle.execute_tool(action["tool"], **args)
+                    self._result = TaskResult(
+                        result=f"User selected '{choice['text']}' and action '{action['tool']}' was triggered.\nResult: {action_result.result}",
+                        guide=f"Executed shortcut: {action['tool']}"
+                    )
+                else:
+                    self._result = TaskResult(result=choice["text"], guide=f"User selected: {choice['text']}")
+                    
                 self._done.set()
                 return self._result
-            return TaskResult(result=None, guide=f"Invalid number. Pick 1-{len(self._options)}.")
+            return TaskResult(result=None, guide=f"Invalid number. Pick 1-{len(self._full_options)}.")
         elif tool_name == "select_other":
             text = kwargs.get("text", "")
             if not text:
@@ -113,7 +147,7 @@ class MultiChoiceSession(SessionTool):
         if cleaned in ("dismiss", "cancel", "nevermind", "never mind"):
             return await self.handle_context_call("dismiss")
         n = _NUMBER_WORDS.get(cleaned)
-        if n is not None and 1 <= n <= len(self._options):
+        if hasattr(self, "_full_options") and n is not None and 1 <= n <= len(self._full_options):
             return await self.handle_context_call("select_option", number=n)
         return None
 

@@ -56,6 +56,9 @@ class ToolHandle:
         """Tell frontend to close a popup by name."""
         raise NotImplementedError
 
+    async def execute_tool(self, tool_name: str, **kwargs) -> TaskResult:
+        """Programmatically execute another tool as if the LLM called it."""
+        raise NotImplementedError
 
 class BaseTool(ABC):
     """Abstract base for all tools. Do not subclass directly —
