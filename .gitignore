@@ -6,3 +6,5 @@ node_modules/
 dist/
 out/
 .claude/
+services.yaml
+settings.json

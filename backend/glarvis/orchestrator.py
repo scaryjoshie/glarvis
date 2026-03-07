@@ -17,6 +17,7 @@ from pipecat.frames.frames import TranscriptionFrame, TTSSpeakFrame
 from pipecat.processors.aggregators.llm_context import LLMContext
 from pipecat.services.llm_service import FunctionCallParams
 
+from glarvis.prompt import build_system_message
 from glarvis.task_manager import TaskManager, Notification, TaskState
 from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult, ToolHandle
 
@@ -312,29 +313,21 @@ class Orchestrator:
         for tool in self._tools.values():
             tool.system = sys_state
 
-        snapshot = self.task_manager.snapshot()
-
-        # List active context tools so the LLM knows what's available
-        ctx_lines = []
+        # Gather active context info
+        active_contexts = {}
         for task_id, state in self._active_contexts.items():
             tool_names = [t.name for t in state.tool.get_context_tools()]
-            ctx_lines.append(f"  {state.tool.name} (session {task_id}): {', '.join(tool_names)}")
-        if ctx_lines:
-            ctx_section = "[Active Session Contexts — use these tools]\n" + "\n".join(ctx_lines)
-            snapshot = f"{snapshot}\n\n{ctx_section}" if snapshot else ctx_section
+            active_contexts[task_id] = (state.tool.name, tool_names)
 
-        # System state section
-        sys_summary = sys_state.summary() if sys_state else None
-        if sys_summary:
-            sys_section = f"[System State]\n{sys_summary}"
-            snapshot = f"{snapshot}\n\n{sys_section}" if snapshot else sys_section
-        else:
-            logger.warning("[Orchestrator] No system state available for injection")
+        content = build_system_message(
+            task_snapshot=self.task_manager.snapshot(),
+            active_contexts=active_contexts,
+            system_state=sys_state,
+        )
 
-        content = f"{self._original_system_message}\n\n{snapshot}" if snapshot else self._original_system_message
         if self.context.messages:
             self.context.messages[0]["content"] = content
-            logger.debug(f"[Orchestrator] System message: {len(content)} chars, has_system_state={sys_summary is not None}")
+            logger.debug(f"[Orchestrator] System message: {len(content)} chars")
 
     # ── Input interception ────────────────────────────────────────────────────
 

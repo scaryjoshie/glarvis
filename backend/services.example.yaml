@@ -1,0 +1,146 @@
+# ── Minerva Services Config ───────────────────────────────────────────────────
+# Copy this to services.yaml and customize.
+# API keys go in .env, not here.
+
+llm:
+  anthropic:
+    name: Anthropic
+    env_key: ANTHROPIC_API_KEY
+    service: pipecat.services.anthropic.llm.AnthropicLLMService
+    models:
+      - claude-sonnet-4-6
+      - claude-haiku-4-5-20251001
+      - claude-opus-4-6
+
+  openai:
+    name: OpenAI
+    env_key: OPENAI_API_KEY
+    service: pipecat.services.openai.llm.OpenAILLMService
+    models:
+      - gpt-4.1
+      - gpt-4.1-mini
+      - gpt-4.1-nano
+      - o4-mini
+
+  openrouter:
+    name: OpenRouter
+    env_key: OPENROUTER_API_KEY
+    service: pipecat.services.openai.llm.OpenAILLMService
+    base_url: https://openrouter.ai/api/v1
+    models:
+      - google/gemini-2.5-flash
+      - anthropic/claude-sonnet-4
+      - deepseek/deepseek-chat-v3-0324
+      - meta-llama/llama-4-maverick
+
+  gemini:
+    name: Gemini
+    env_key: GEMINI_API_KEY
+    service: pipecat.services.google.llm.GoogleLLMService
+    models:
+      - gemini-2.5-flash
+      - gemini-2.5-pro
+
+  cerebras:
+    name: Cerebras
+    env_key: CEREBRAS_API_KEY
+    service: pipecat.services.cerebras.llm.CerebrasLLMService
+    models:
+      - llama-4-scout-17b-16e-instruct
+      - llama3.3-70b
+
+  grok:
+    name: Grok
+    env_key: GROK_API_KEY
+    service: pipecat.services.grok.llm.GrokLLMService
+    models:
+      - grok-3-fast
+      - grok-3-mini-fast
+
+  deepseek:
+    name: DeepSeek
+    env_key: DEEPSEEK_API_KEY
+    service: pipecat.services.deepseek.llm.DeepSeekLLMService
+    models:
+      - deepseek-chat
+      - deepseek-reasoner
+
+  together:
+    name: Together
+    env_key: TOGETHER_API_KEY
+    service: pipecat.services.together.llm.TogetherLLMService
+    models:
+      - meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
+      - meta-llama/Llama-4-Scout-17B-16E-Instruct
+
+tts:
+  cartesia:
+    name: Cartesia
+    env_key: CARTESIA_API_KEY
+    service: pipecat.services.cartesia.tts.CartesiaTTSService
+    voices:
+      - id: 87748186-23bb-4158-a1eb-332911b0b708
+        name: British Lady
+      - id: a0e99841-438c-4a64-b679-ae501e7d6091
+        name: Barbershop Man
+      - id: 694f9389-aac1-45b6-b726-9d9369183238
+        name: Friendly Sidekick
+    params:
+      speed: 1.25
+
+  elevenlabs:
+    name: ElevenLabs
+    env_key: ELEVENLABS_API_KEY
+    service: pipecat.services.elevenlabs.tts.ElevenLabsTTSService
+    voices:
+      - id: 21m00Tcm4TlvDq8ikWAM
+        name: Rachel
+      - id: ErXwobaYiN019PkySvjV
+        name: Antoni
+
+  deepgram:
+    name: Deepgram TTS
+    env_key: DEEPGRAM_API_KEY
+    service: pipecat.services.deepgram.tts.DeepgramTTSService
+    voices:
+      - id: aura-asteria-en
+        name: Asteria
+      - id: aura-luna-en
+        name: Luna
+
+  openai:
+    name: OpenAI TTS
+    env_key: OPENAI_API_KEY
+    service: pipecat.services.openai.tts.OpenAITTSService
+    voices:
+      - id: alloy
+        name: Alloy
+      - id: nova
+        name: Nova
+      - id: shimmer
+        name: Shimmer
+
+  inworld:
+    name: Inworld
+    env_key: INWORLD_API_KEY
+    service: pipecat.services.inworld.tts.InworldHttpTTSService
+    voices:
+      - id: default
+        name: Default
+
+stt:
+  deepgram:
+    name: Deepgram
+    env_key: DEEPGRAM_API_KEY
+    service: pipecat.services.deepgram.stt.DeepgramSTTService
+    models:
+      - nova-3
+      - nova-2
+
+  openai:
+    name: OpenAI STT
+    env_key: OPENAI_API_KEY
+    service: pipecat.services.openai.stt.OpenAISTTService
+    models:
+      - whisper-1
+      - gpt-4o-transcribe

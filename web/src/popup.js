@@ -8,7 +8,6 @@ import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import './app.css';
 import MultiChoice from './lib/popups/MultiChoice.svelte';
 import BoardNotify from './lib/popups/BoardNotify.svelte';
-
 const el = document.getElementById('popup');
 
 const components = {

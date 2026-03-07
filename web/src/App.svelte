@@ -3,6 +3,7 @@
   import Transcript from './lib/components/Transcript.svelte';
   import Board from './lib/components/Board.svelte';
   import StatusBar from './lib/components/StatusBar.svelte';
+  import SettingsModal from './lib/components/SettingsModal.svelte';
 </script>
 
 <div class="app">
@@ -19,6 +20,8 @@
     </div>
   </div>
 </div>
+
+<SettingsModal />
 
 <style>
   .app {

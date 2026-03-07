@@ -1,5 +1,5 @@
 <script>
-  import { connectionState, agentState } from '../stores/connection.js';
+  import { connectionState, agentState, modelDisplay, openSettings } from '../stores/connection.js';
 
   $: stateLabel = {
     idle: 'Idle',
@@ -31,7 +31,9 @@
   </div>
 
   <div class="right">
-    <span class="model-label">Claude Haiku 4.5</span>
+    <button class="model-btn" on:click={openSettings}>
+      {$modelDisplay || 'model'}
+    </button>
   </div>
 </div>
 
@@ -74,9 +76,20 @@
     color: var(--color-muted);
   }
 
-  .model-label {
+  .model-btn {
+    background: none;
+    border: none;
     color: var(--color-muted);
     font-family: var(--font-mono);
     font-size: 11px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.1s;
+  }
+
+  .model-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--color-text);
   }
 </style>

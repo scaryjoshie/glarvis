@@ -86,7 +86,6 @@ class SearchFiles(AsyncTool):
         import glob
 
         matches = glob.glob(f"**/*{pattern}*", recursive=True)
-        await asyncio.sleep(1)
         return TaskResult(
             result=matches,
             guide=f"Found {len(matches)} files matching {pattern}",

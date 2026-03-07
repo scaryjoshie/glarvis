@@ -54,7 +54,6 @@ class BaseTool(ABC):
 - `persist_in_display = True` — stays visible in TaskDisplay
 - No TTL by default
 - Good for: Claude Code, browser automation, stateful interactions
-- **Note**: `on_input()` routing is not yet wired in the orchestrator
 
 ## TaskResult
 
@@ -70,16 +69,37 @@ class TaskResult:
 - `guide`: suggestion for what the LLM might say. Not a script — LLM can rephrase or ignore.
 - `board_content`: markdown posted to the Board stream. The LLM does NOT see this.
 
-## Current tools (`backend/glarvis/tools/examples.py`)
+## Current tools
+
+### Core tools (`backend/glarvis/tools/core.py`)
+
+| Tool | Type | Description |
+|------|------|-------------|
+| Mute | InlineTool | Mute voice input (server-side gate) |
+| CloseBoard | InlineTool | Close board notification popups |
+| EnterSession | InlineTool | Activate a session's context by task ID |
+| ExitSession | InlineTool | Deactivate a session's context |
+| ListTools | InlineTool | Lists all registered tools on the board |
+| DebugContext | InlineTool | Dumps full LLM context to board |
+
+### General tools (`backend/glarvis/tools/general.py`)
 
 | Tool | Type | Description |
 |------|------|-------------|
 | GetTime | InlineTool | Returns current date and time |
+| WriteBoard | InlineTool | Posts arbitrary markdown to the board |
 | ListDirectory | InlineTool | Lists files, posts to board |
 | SearchFiles | AsyncTool | Searches files by pattern, posts to board |
-| WriteBoard | InlineTool | Posts arbitrary markdown to the board |
-| ListTools | InlineTool | Lists all registered tools on the board |
-| DebugContext | InlineTool | Dumps full LLM context, messages, and task state to board |
+| ReadFile | InlineTool | Reads file contents, posts to board |
+| FocusWindow | InlineTool | Focus a window by stable ID |
+| SearchPrograms | InlineTool | Search installed programs by name |
+| OpenProgram | InlineTool | Launch a program by exact name |
+
+### Session tools (`backend/glarvis/tools/multi_choice.py`)
+
+| Tool | Type | Description |
+|------|------|-------------|
+| MultiChoiceSession | SessionTool | Popup with numbered options (voice/click selection) |
 
 ## Writing a new tool
 

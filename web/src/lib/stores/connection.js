@@ -12,11 +12,35 @@ export const tasks = writable([]);
 export const transcript = writable([]);
 export const boardStream = writable([]);    // array of {author, content, timestamp}
 export const boardFocused = writable(null);  // currently focused item index
+export const modelDisplay = writable('');    // current model name for status bar
+export const settingsOpen = writable(false); // settings modal visibility
+export const settingsData = writable({ llm: {}, tts: {}, stt: {}, services: {} }); // cached settings
+
+// ── Volume stores (persisted in localStorage) ────────────────────────────────
+
+function storedVolume(key, defaultVal) {
+  const stored = localStorage.getItem(key);
+  const initial = stored !== null ? parseFloat(stored) : defaultVal;
+  const store = writable(isNaN(initial) ? defaultVal : initial);
+  store.subscribe(v => { try { localStorage.setItem(key, v.toString()); } catch {} });
+  return store;
+}
+
+export const sfxVolume = storedVolume('minerva_sfx_vol', 0.5);
+export const voiceVolume = storedVolume('minerva_voice_vol', 1.0);
 
 // ── Sound effects ────────────────────────────────────────────────────────────
 
 function playSound(name) {
-  try { new Audio(`/sounds/${name}.mp3`).play(); } catch {}
+  try {
+    let vol;
+    const unsub = sfxVolume.subscribe(v => vol = v);
+    unsub();
+    if (vol === 0) return;
+    const audio = new Audio(`/sounds/${name}.mp3`);
+    audio.volume = Math.min(vol, 1.0);
+    audio.play();
+  } catch {}
 }
 
 let ws = null;
@@ -127,8 +151,17 @@ function sendPopupAction(toolName, action, data) {
 let pc = null;
 let localStream = null;
 let pcId = null;
+let wsIntentionallyClosed = false;
+let wsReconnectDelay = 1000;
+let wsReconnectTimer = null;
 
 export function connectWebSocket() {
+  wsIntentionallyClosed = false;
+  wsReconnectDelay = 1000;
+  _connectWs();
+}
+
+function _connectWs() {
   if (ws) {
     ws.close();
     ws = null;
@@ -136,7 +169,11 @@ export function connectWebSocket() {
   const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
   ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
-  ws.onopen = () => console.log('[WS] Connected');
+  ws.onopen = () => {
+    console.log('[WS] Connected');
+    wsReconnectDelay = 1000; // reset backoff on success
+    requestSettings();
+  };
 
   ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
@@ -174,11 +211,34 @@ export function connectWebSocket() {
       case 'popup_close':
         closePopup(msg.tool_name);
         break;
+      case 'model_info':
+        modelDisplay.set(msg.model_display);
+        break;
+      case 'settings':
+        settingsData.set({
+          llm: msg.llm || {},
+          tts: msg.tts || {},
+          stt: msg.stt || {},
+          services: msg.services || {},
+        });
+        break;
+      case 'settings_saved':
+        modelDisplay.set(msg.model_display);
+        break;
     }
   };
 
   ws.onclose = () => {
     console.log('[WS] Disconnected');
+    ws = null;
+    if (!wsIntentionallyClosed && pc) {
+      // WebRTC is still alive — reconnect WS
+      console.log(`[WS] Reconnecting in ${wsReconnectDelay}ms...`);
+      wsReconnectTimer = setTimeout(() => {
+        _connectWs();
+        wsReconnectDelay = Math.min(wsReconnectDelay * 2, 16000);
+      }, wsReconnectDelay);
+    }
   };
 }
 
@@ -194,12 +254,25 @@ export async function connectWebRTC() {
     // Add mic track
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-    // Play received audio
+    // Play received audio through GainNode (allows volume > 100%)
     pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track');
-      remoteAudio = new Audio();
-      remoteAudio.srcObject = event.streams[0];
-      remoteAudio.play().catch(e => console.warn('[WebRTC] Audio autoplay blocked:', e));
+      try {
+        audioCtx = new AudioContext();
+        const source = audioCtx.createMediaStreamSource(event.streams[0]);
+        voiceGain = audioCtx.createGain();
+        let vol;
+        const unsub = voiceVolume.subscribe(v => vol = v);
+        unsub();
+        voiceGain.gain.value = vol;
+        source.connect(voiceGain);
+        voiceGain.connect(audioCtx.destination);
+      } catch (e) {
+        console.warn('[WebRTC] GainNode setup failed, falling back to Audio element:', e);
+        remoteAudio = new Audio();
+        remoteAudio.srcObject = event.streams[0];
+        remoteAudio.play().catch(err => console.warn('[WebRTC] Audio autoplay blocked:', err));
+      }
     };
 
     // Collect ICE candidates to send to server
@@ -278,7 +351,15 @@ export async function connectWebRTC() {
   }
 }
 
-let remoteAudio = null;
+let remoteAudio = null; // fallback only
+let audioCtx = null;
+let voiceGain = null;
+
+// Live-update voice gain when slider moves
+voiceVolume.subscribe(v => {
+  if (voiceGain) voiceGain.gain.value = v;
+  if (remoteAudio) remoteAudio.volume = Math.min(v, 1.0);
+});
 
 export function toggleMute() {
   if (!localStream) return;
@@ -310,6 +391,12 @@ export function toggleMute() {
 export function toggleDeafen() {
   deafened.update(d => {
     const next = !d;
+    if (voiceGain) {
+      let vol;
+      const unsub = voiceVolume.subscribe(v => vol = v);
+      unsub();
+      voiceGain.gain.value = next ? 0 : vol;
+    }
     if (remoteAudio) remoteAudio.muted = next;
     // Deafen implies mute
     if (next && localStream) {
@@ -332,6 +419,53 @@ export function sendContextToggle(taskId) {
   }
 }
 
+export async function openSettings() {
+  requestSettings();
+  settingsOpen.set(true);
+  // If WS isn't connected, fetch via REST so providers still load
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    try {
+      const res = await fetch('/api/settings');
+      if (res.ok) {
+        const data = await res.json();
+        settingsData.set({
+          llm: data.llm || {},
+          tts: data.tts || {},
+          stt: data.stt || {},
+          services: data.services || {},
+        });
+      }
+    } catch {}
+  }
+}
+
+export function requestSettings() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'get_settings' }));
+  }
+}
+
+export function saveSettings({ llm, tts, stt }) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'save_settings', llm, tts, stt }));
+  }
+}
+
+export async function reloadSettings() {
+  try {
+    const res = await fetch('/api/settings?reload=true');
+    if (res.ok) {
+      const data = await res.json();
+      settingsData.set({
+        llm: data.llm || {},
+        tts: data.tts || {},
+        stt: data.stt || {},
+        services: data.services || {},
+      });
+    }
+  } catch {}
+}
+
 async function clearSessionState() {
   transcript.set([]);
   boardStream.set([]);
@@ -346,6 +480,11 @@ async function clearSessionState() {
 
 export function disconnect() {
   playSound('leave');
+  wsIntentionallyClosed = true;
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
   if (pc) {
     pc.close();
     pc = null;
@@ -357,6 +496,11 @@ export function disconnect() {
   if (ws) {
     ws.close();
     ws = null;
+  }
+  if (audioCtx) {
+    audioCtx.close().catch(() => {});
+    audioCtx = null;
+    voiceGain = null;
   }
   if (remoteAudio) {
     remoteAudio.pause();

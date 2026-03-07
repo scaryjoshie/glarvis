@@ -4,6 +4,7 @@ import asyncio
 import json
 import sys
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,13 +21,33 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from glarvis.pipeline import PipelineSession, build_session
+from glarvis.services import (
+    get_status as get_service_status,
+    add_service_item,
+    remove_service_item,
+    edit_service_voice,
+    set_provider_speed,
+)
+from glarvis.settings import LLMSettings, TTSSettings, STTSettings, Settings, load_settings, save_settings
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
 
-app = FastAPI()
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    yield
+    # Shutdown
+    global session
+    logger.info("[Server] Shutting down...")
+    if session:
+        await session.teardown()
+        session = None
+
+
+app = FastAPI(lifespan=lifespan)
 request_handler = SmallWebRTCRequestHandler()
 
 # ── Session state ─────────────────────────────────────────────────────────────
@@ -47,13 +68,62 @@ async def broadcast(msg: dict):
         ws_clients.discard(client)
 
 
-@app.on_event("shutdown")
-async def shutdown():
-    global session
-    logger.info("[Server] Shutting down...")
-    if session:
-        await session.teardown()
-        session = None
+# ── REST endpoints ────────────────────────────────────────────────────────────
+
+def _settings_payload(settings: Settings) -> dict:
+    status = get_service_status()
+    return {
+        "llm": {
+            "provider": settings.llm.provider,
+            "model": settings.llm.model,
+            "has_override": bool(settings.llm.api_key),
+        },
+        "tts": {
+            "provider": settings.tts.provider,
+            "voice_id": settings.tts.voice_id,
+            "has_override": bool(settings.tts.api_key),
+        },
+        "stt": {
+            "provider": settings.stt.provider,
+            "model": settings.stt.model,
+            "has_override": bool(settings.stt.api_key),
+        },
+        "services": status,
+    }
+
+
+@app.get("/api/settings")
+async def get_settings(reload: bool = False):
+    if reload:
+        from glarvis.services.registry import reload_config
+        reload_config()
+    settings = load_settings()
+    return _settings_payload(settings)
+
+
+@app.post("/api/services/add")
+async def api_add_item(body: dict):
+    ok = add_service_item(body["service_type"], body["provider"], body["item"])
+    return {"ok": ok, "services": get_service_status()}
+
+
+@app.post("/api/services/remove")
+async def api_remove_item(body: dict):
+    ok = remove_service_item(body["service_type"], body["provider"], body["item_id"])
+    return {"ok": ok, "services": get_service_status()}
+
+
+@app.post("/api/services/edit-voice")
+async def api_edit_voice(body: dict):
+    ok = edit_service_voice(body["provider"], body["voice_id"], body.get("updates", {}))
+    return {"ok": ok, "services": get_service_status()}
+
+
+@app.post("/api/services/speed")
+async def api_set_speed(body: dict):
+    speed = body.get("speed")
+    ok = set_provider_speed(body["provider"], float(speed) if speed is not None else None)
+    return {"ok": ok, "services": get_service_status()}
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -94,6 +164,40 @@ async def _handle_ws_message(msg: dict):
             await session.orchestrator.handle_popup_action(
                 msg.get("tool_name", ""), msg.get("action", ""), msg.get("data", {}),
             )
+    elif msg_type == "get_settings":
+        settings = load_settings()
+        payload = _settings_payload(settings)
+        payload["type"] = "settings"
+        await broadcast(payload)
+    elif msg_type == "save_settings":
+        existing = load_settings()
+        llm_data = msg.get("llm", {})
+        tts_data = msg.get("tts", {})
+        stt_data = msg.get("stt", {})
+        # api_key: null/absent = keep existing, "" = clear, "sk-..." = set new
+        llm_key = llm_data.get("api_key")
+        tts_key = tts_data.get("api_key")
+        stt_key = stt_data.get("api_key")
+        settings = Settings(
+            llm=LLMSettings(
+                provider=llm_data.get("provider", "anthropic"),
+                model=llm_data.get("model", "claude-sonnet-4-6"),
+                api_key=existing.llm.api_key if llm_key is None else llm_key,
+            ),
+            tts=TTSSettings(
+                provider=tts_data.get("provider", "cartesia"),
+                voice_id=tts_data.get("voice_id", ""),
+                api_key=existing.tts.api_key if tts_key is None else tts_key,
+            ),
+            stt=STTSettings(
+                provider=stt_data.get("provider", "deepgram"),
+                model=stt_data.get("model", ""),
+                api_key=existing.stt.api_key if stt_key is None else stt_key,
+            ),
+        )
+        save_settings(settings)
+        logger.info(f"[Server] Settings saved: LLM={settings.llm.provider}/{settings.llm.model} TTS={settings.tts.provider} STT={settings.stt.provider}")
+        await broadcast({"type": "settings_saved", "model_display": settings.llm.display_name})
 
 
 async def _inject_user_text(text: str):
@@ -157,6 +261,7 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[Server] Client connected to WebRTC")
+        await broadcast({"type": "model_info", "model_display": session.model_display})
         await session.orchestrator.broadcast_welcome()
 
     @transport.event_handler("on_client_disconnected")
