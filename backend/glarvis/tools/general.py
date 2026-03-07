@@ -140,11 +140,12 @@ class FocusWindow(InlineTool):
         self._monitor = monitor
 
     async def run(self, id: int = 0, **kwargs) -> TaskResult:
+        win = next((w for w in self._monitor.state.windows if w.id == id), None)
+        if not win:
+            return TaskResult(result=f"Window {id} not found", guide=f"Couldn't find window {id}")
         if self._monitor.focus_window(id):
-            win = next((w for w in self._monitor.state.windows if w.id == id), None)
-            title = win.title if win else f"window {id}"
-            return TaskResult(result=f"Focused {title}", guide=f"Switched to {title}")
-        return TaskResult(result=f"Window {id} not found", guide=f"Couldn't find window {id}")
+            return TaskResult(result=f"Focused {win.title}", guide=f"Switched to {win.title}")
+        return TaskResult(result=f"Failed to focus {win.title}", guide=f"Couldn't bring {win.title} to front")
 
 
 class SearchPrograms(InlineTool):

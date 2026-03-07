@@ -100,11 +100,20 @@ def focus_window(hwnd: int) -> bool:
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
 
-        # Allow our process to set the foreground window
-        ASFW_ANY = -1
-        ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)
+        # Attach to the foreground window's thread so Windows allows the switch
+        fg_hwnd = win32gui.GetForegroundWindow()
+        fg_thread = ctypes.windll.user32.GetWindowThreadProcessId(fg_hwnd, None)
+        our_thread = ctypes.windll.kernel32.GetCurrentThreadId()
+
+        if fg_thread != our_thread:
+            ctypes.windll.user32.AttachThreadInput(our_thread, fg_thread, True)
+
         win32gui.BringWindowToTop(hwnd)
         win32gui.SetForegroundWindow(hwnd)
+
+        if fg_thread != our_thread:
+            ctypes.windll.user32.AttachThreadInput(our_thread, fg_thread, False)
+
         return True
     except Exception:
         return False

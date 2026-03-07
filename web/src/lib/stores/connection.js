@@ -169,7 +169,12 @@ export function connectWebSocket() {
 }
 
 function _connectWs() {
+  if (wsReconnectTimer) {
+    clearTimeout(wsReconnectTimer);
+    wsReconnectTimer = null;
+  }
   if (ws) {
+    ws.onclose = null; // detach so old close doesn't null out the new ws
     ws.close();
     ws = null;
   }
