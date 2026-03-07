@@ -21,6 +21,9 @@ from glarvis.task_manager import TaskManager, Notification, TaskState
 from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult, ToolHandle
 
 if TYPE_CHECKING:
+    from glarvis.system.monitor import SystemMonitor
+
+if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
     from pipecat.services.llm_service import LLMService
 
@@ -61,6 +64,7 @@ class Orchestrator:
         self.pipeline_task = pipeline_task
         self._tools: dict[str, BaseTool] = {}
         self._broadcast: Callable[[dict], Coroutine] | None = None
+        self.system_monitor: SystemMonitor | None = None
         self._transcript_id = 0
         self._board_post_index = 0
 
@@ -293,9 +297,15 @@ class Orchestrator:
 
         Called by BoardContextInjector on every LLMRunFrame. Rebuilds tools
         defensively (Pipecat may reset context.tools between turns) and
-        injects task state + available context tools into the system message.
+        injects task state, system state, and available context tools into
+        the system message.
         """
         self._rebuild_tools()
+
+        # Distribute system state to all tools
+        sys_state = self.system_monitor.state if self.system_monitor else None
+        for tool in self._tools.values():
+            tool.system = sys_state
 
         snapshot = self.task_manager.snapshot()
 
@@ -307,6 +317,12 @@ class Orchestrator:
         if ctx_lines:
             ctx_section = "[Active Session Contexts — use these tools]\n" + "\n".join(ctx_lines)
             snapshot = f"{snapshot}\n\n{ctx_section}" if snapshot else ctx_section
+
+        # System state section
+        sys_summary = sys_state.summary() if sys_state else None
+        if sys_summary:
+            sys_section = f"[System State]\n{sys_summary}"
+            snapshot = f"{snapshot}\n\n{sys_section}" if snapshot else sys_section
 
         content = f"{self._original_system_message}\n\n{snapshot}" if snapshot else self._original_system_message
         if self.context.messages:

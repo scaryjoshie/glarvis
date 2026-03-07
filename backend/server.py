@@ -35,6 +35,7 @@ from pipecat.transports.smallwebrtc.request_handler import (
 )
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
+from glarvis.system import SystemMonitor
 from glarvis.context_injector import BoardContextInjector
 from glarvis.mute_gate import MuteGate
 from glarvis.orchestrator import Orchestrator
@@ -79,6 +80,7 @@ ws_clients: set[WebSocket] = set()
 active_pipeline_task: PipelineTask | None = None
 active_orchestrator: Orchestrator | None = None
 active_mute_gate: MuteGate | None = None
+active_system_monitor: SystemMonitor | None = None
 
 
 async def broadcast(msg: dict):
@@ -299,10 +301,16 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     orchestrator.pipeline_task = task
 
-    global active_pipeline_task, active_orchestrator, active_mute_gate
+    # Start system monitor
+    system_monitor = SystemMonitor(interval=2.0)
+    orchestrator.system_monitor = system_monitor
+    system_monitor.start()
+
+    global active_pipeline_task, active_orchestrator, active_mute_gate, active_system_monitor
     active_pipeline_task = task
     active_orchestrator = orchestrator
     active_mute_gate = mute_gate
+    active_system_monitor = system_monitor
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
@@ -312,11 +320,14 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        global active_pipeline_task, active_orchestrator, active_mute_gate
+        global active_pipeline_task, active_orchestrator, active_mute_gate, active_system_monitor
         logger.info("[Server] Client disconnected from WebRTC")
+        if active_system_monitor:
+            active_system_monitor.stop()
         active_pipeline_task = None
         active_orchestrator = None
         active_mute_gate = None
+        active_system_monitor = None
         await task.cancel()
 
     # Run pipeline in background so the HTTP response returns immediately
