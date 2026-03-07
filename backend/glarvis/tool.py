@@ -77,7 +77,6 @@ class BaseTool(ABC):
 
     # ── Set by orchestrator at registration ─────────────────────────────
     handle: ToolHandle | None = None
-    system: Any = None  # SystemState, set by orchestrator before each turn
 
     # ── Core execution ────────────────────────────────────────────────────
 
