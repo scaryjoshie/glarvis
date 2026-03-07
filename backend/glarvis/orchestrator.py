@@ -60,15 +60,16 @@ class Orchestrator:
         task_manager: TaskManager,
         llm: LLMService,
         context: LLMContext,
-        pipeline_task: PipelineTask,
+        broadcast: Callable[[dict], Coroutine],
+        system_monitor: SystemMonitor | None = None,
     ):
         self.task_manager = task_manager
         self.llm = llm
         self.context = context
-        self.pipeline_task = pipeline_task
+        self.pipeline_task: PipelineTask | None = None
         self._tools: dict[str, BaseTool] = {}
-        self._broadcast: Callable[[dict], Coroutine] | None = None
-        self.system_monitor: SystemMonitor | None = None
+        self._broadcast = broadcast
+        self.system_monitor = system_monitor
         self._transcript_id = 0
         self._board_post_index = 0
 
@@ -84,8 +85,8 @@ class Orchestrator:
 
     # ── Broadcasting ─────────────────────────────────────────────────────────
 
-    def set_broadcast(self, broadcast_fn: Callable[[dict], Coroutine]):
-        self._broadcast = broadcast_fn
+    def set_pipeline_task(self, task: PipelineTask):
+        self.pipeline_task = task
 
     async def _broadcast_msg(self, msg: dict):
         if self._broadcast:

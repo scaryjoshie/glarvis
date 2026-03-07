@@ -8,7 +8,7 @@
     reloading = false;
   }
 
-  // ── Selection state (synced from store on open) ──────────────────────────
+  // ── Selection state (synced from store on open, once) ─────────────────────
 
   let llmProvider = '';
   let llmModel = '';
@@ -16,19 +16,27 @@
   let ttsVoice = '';
   let sttProvider = '';
   let sttModel = '';
+  let settingsInitialized = false;
 
-  $: if ($settingsOpen) {
-    const d = $settingsData;
+  function initFromData(d) {
     llmProvider = d.llm?.provider || 'anthropic';
     llmModel = d.llm?.model || '';
     ttsProvider = d.tts?.provider || 'cartesia';
     ttsVoice = d.tts?.voice_id || '';
     sttProvider = d.stt?.provider || 'deepgram';
     sttModel = d.stt?.model || '';
-    // Track whether overrides exist (from backend)
     llmHasOverride = d.llm?.has_override || false;
     ttsHasOverride = d.tts?.has_override || false;
     sttHasOverride = d.stt?.has_override || false;
+    // Init speed from the current TTS provider
+    const ttsProv = (d.services?.tts || []).find(p => p.id === (d.tts?.provider || 'cartesia'));
+    speedEnabled = ttsProv?.speed != null;
+    speedValue = ttsProv?.speed ?? (ttsProv?.speed_config?.default ?? 1.0);
+    settingsInitialized = true;
+  }
+
+  $: if ($settingsOpen && !settingsInitialized) {
+    initFromData($settingsData);
   }
 
   // ── Derived data ──────────────────────────────────────────────────────────
@@ -130,6 +138,9 @@
     } else if (activeTab === 'tts') {
       ttsProvider = id;
       if (p) ttsVoice = p.default_voice || '';
+      // Update speed state for the new provider
+      speedEnabled = p?.speed != null;
+      speedValue = p?.speed ?? (p?.speed_config?.default ?? 1.0);
     } else if (activeTab === 'stt') {
       sttProvider = id;
       if (p) sttModel = p.default_model || '';
@@ -150,16 +161,12 @@
   let speedValue = 1.0;
   let speedDebounce = null;
 
-  $: if (activeTab === 'tts' && currentProvider) {
-    speedEnabled = currentProvider.speed != null;
-    speedValue = currentProvider.speed ?? 1.0;
-  }
-
   async function toggleSpeed() {
     speedEnabled = !speedEnabled;
     if (speedEnabled) {
-      speedValue = 1.0;
-      await saveSpeed(1.0);
+      const dflt = currentProvider?.speed_config?.default ?? 1.0;
+      speedValue = dflt;
+      await saveSpeed(dflt);
     } else {
       await clearSpeed();
     }
@@ -331,6 +338,7 @@
     editingKeyFor = null;
     pendingKeyValues = {};
     pendingKeyClears = {};
+    settingsInitialized = false;
   }
 
   function onKeydown(e) {
@@ -518,8 +526,8 @@
               {/if}
             </div>
 
-            <!-- Speed (TTS only) -->
-            {#if activeTab === 'tts'}
+            <!-- Speed (TTS only, for providers that support it) -->
+            {#if activeTab === 'tts' && currentProvider?.supports_speed}
               <div class="speed-section">
                 <div class="speed-header">
                   <label class="speed-toggle">
@@ -531,11 +539,12 @@
                   {/if}
                 </div>
                 {#if speedEnabled}
+                  {@const cfg = currentProvider.speed_config || { min: 0.5, max: 2.0 }}
                   <input
                     type="range"
                     class="speed-slider"
-                    min="0.5"
-                    max="2.0"
+                    min={cfg.min}
+                    max={cfg.max}
                     step="0.05"
                     bind:value={speedValue}
                     on:input={onSpeedChange}

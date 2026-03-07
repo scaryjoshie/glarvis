@@ -70,15 +70,19 @@ def build_session(
     tts = create_tts(settings.tts.provider, settings.tts.voice_id, settings.tts.api_key)
     llm = create_llm(settings.llm.provider, settings.llm.model, settings.llm.api_key)
 
-    # Orchestrator with temporary context (rebuilt after tool registration)
+    # Orchestrator and Context
     task_manager = TaskManager()
-    temp_context = LLMContext(messages=[{"role": "system", "content": BASE_PROMPT}])
-    orchestrator = Orchestrator(task_manager, llm, temp_context, pipeline_task=None)
-
+    context = LLMContext(messages=[{"role": "system", "content": BASE_PROMPT}])
+    
     # Mute gate and system monitor
     mute_gate = MuteGate(broadcast=broadcast)
     system_monitor = SystemMonitor(interval=2.0)
     system_monitor.start()
+
+    orchestrator = Orchestrator(
+        task_manager, llm, context, 
+        broadcast=broadcast, system_monitor=system_monitor
+    )
 
     # Register all tools
     for tool in [
@@ -93,15 +97,8 @@ def build_session(
     orchestrator.register(EnterSession(orchestrator))
     orchestrator.register(ExitSession(orchestrator))
 
-    # Rebuild context with tools schema
-    context = LLMContext(
-        messages=[{"role": "system", "content": BASE_PROMPT}],
-        tools=orchestrator.get_tools_schema(),
-    )
-    orchestrator.context = context
-    orchestrator._original_system_message = BASE_PROMPT
-    orchestrator.set_broadcast(broadcast)
-    orchestrator.system_monitor = system_monitor
+    # Rebuild context with gathered tools schema
+    context.set_tools(orchestrator.get_tools_schema())
 
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -140,7 +137,7 @@ def build_session(
         ),
     )
 
-    orchestrator.pipeline_task = task
+    orchestrator.set_pipeline_task(task)
 
     session.task = task
     session.orchestrator = orchestrator

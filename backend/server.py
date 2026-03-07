@@ -236,27 +236,30 @@ async def webrtc_ice(request: dict):
     return {"ok": True}
 
 
+session_lock = asyncio.Lock()
+
 async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     global session
 
-    # Tear down previous session
-    if session:
-        logger.info("[Server] Cancelling previous pipeline before new connection")
-        await session.teardown()
-        session = None
+    async with session_lock:
+        # Tear down previous session
+        if session:
+            logger.info("[Server] Cancelling previous pipeline before new connection")
+            await session.teardown()
+            session = None
 
-    logger.info("[Server] New WebRTC connection, building pipeline...")
+        logger.info("[Server] New WebRTC connection, building pipeline...")
 
-    transport = SmallWebRTCTransport(
-        webrtc_connection=webrtc_connection,
-        params=TransportParams(
-            audio_in_enabled=True,
-            audio_out_enabled=True,
-            audio_in_passthrough=True,
-        ),
-    )
+        transport = SmallWebRTCTransport(
+            webrtc_connection=webrtc_connection,
+            params=TransportParams(
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                audio_in_passthrough=True,
+            ),
+        )
 
-    session = build_session(transport, broadcast)
+        session = build_session(transport, broadcast)
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):

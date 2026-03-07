@@ -39,8 +39,15 @@ function playSound(name) {
     if (vol === 0) return;
     const audio = new Audio(`/sounds/${name}.mp3`);
     audio.volume = Math.min(vol, 1.0);
-    audio.play();
-  } catch {}
+    audio.play().catch(e => {
+      // Ignore aborts from rapid interaction and autoplay blocks
+      if (e.name !== 'AbortError' && e.name !== 'NotAllowedError') {
+        console.warn(`[Sound] Failed to play ${name}:`, e);
+      }
+    });
+  } catch (e) {
+    console.warn(`[Sound] Error setting up audio:`, e);
+  }
 }
 
 let ws = null;
@@ -485,6 +492,10 @@ export function disconnect() {
     clearTimeout(wsReconnectTimer);
     wsReconnectTimer = null;
   }
+  if (ws) {
+    ws.close();
+    ws = null;
+  }
   if (pc) {
     pc.close();
     pc = null;
@@ -492,10 +503,6 @@ export function disconnect() {
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
-  }
-  if (ws) {
-    ws.close();
-    ws = null;
   }
   if (audioCtx) {
     audioCtx.close().catch(() => {});

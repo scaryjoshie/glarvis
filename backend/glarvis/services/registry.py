@@ -122,17 +122,24 @@ def create_tts(provider_id: str, voice_id: str = "", api_key_override: str = "")
         import aiohttp
         kwargs["aiohttp_session"] = aiohttp.ClientSession()
 
-    # Apply extra params (speed, etc.)
+    # Apply speed from params using provider's speed_config
     params = provider.get("params", {})
-    if params:
-        # Try to use InputParams if the service supports it
-        if hasattr(ServiceClass, "InputParams"):
-            from pipecat.services.cartesia.tts import GenerationConfig
-            input_params = {}
-            if "speed" in params:
-                input_params["generation_config"] = GenerationConfig(speed=params["speed"])
-            if input_params:
-                kwargs["params"] = ServiceClass.InputParams(**input_params)
+    speed_config = provider.get("speed_config")
+    if params and "speed" in params and speed_config:
+        speed_val = params["speed"]
+        param_name = speed_config.get("param", "speed")
+        try:
+            if param_name == "generation_config":
+                # Cartesia: nested GenerationConfig
+                from pipecat.services.cartesia.tts import GenerationConfig
+                kwargs["params"] = ServiceClass.InputParams(
+                    generation_config=GenerationConfig(speed=speed_val)
+                )
+            else:
+                # OpenAI, ElevenLabs, Inworld, etc: direct param on InputParams
+                kwargs["params"] = ServiceClass.InputParams(**{param_name: speed_val})
+        except (ImportError, AttributeError, TypeError) as e:
+            logger.warning(f"[Services] Speed param failed for {provider['name']}: {e}")
 
     logger.info(f"[Services] Creating TTS: {provider['name']} / {voice_id}")
     return ServiceClass(**kwargs)
@@ -256,6 +263,14 @@ def get_status() -> dict:
                 entry["voices"] = pdata.get("voices", [])
                 entry["default_voice"] = entry["voices"][0]["id"] if entry["voices"] else ""
                 entry["speed"] = pdata.get("params", {}).get("speed")
+                entry["supports_speed"] = bool(pdata.get("supports_speed", False))
+                speed_cfg = pdata.get("speed_config")
+                if speed_cfg:
+                    entry["speed_config"] = {
+                        "min": speed_cfg.get("min", 0.5),
+                        "max": speed_cfg.get("max", 2.0),
+                        "default": speed_cfg.get("default", 1.0),
+                    }
             elif service_type == "stt":
                 models = pdata.get("models", [])
                 entry["models"] = models

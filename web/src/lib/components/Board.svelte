@@ -1,6 +1,7 @@
 <script>
   import { boardStream, boardFocused } from '../stores/connection.js';
   import { marked } from 'marked';
+  import DOMPurify from 'dompurify';
 
   marked.setOptions({ breaks: true, gfm: true });
 
@@ -8,7 +9,7 @@
 
   $: displayIndex = hoveredIndex !== null ? hoveredIndex : $boardFocused;
   $: focused = displayIndex !== null ? $boardStream[displayIndex] : null;
-  $: focusedHtml = focused ? marked.parse(focused.content) : '';
+  $: focusedHtml = focused ? DOMPurify.sanitize(marked.parse(focused.content)) : '';
 
   function formatTime(ts) {
     return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
