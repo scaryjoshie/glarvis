@@ -46,8 +46,10 @@ llm:
     env_key: CEREBRAS_API_KEY
     service: pipecat.services.cerebras.llm.CerebrasLLMService
     models:
-      - llama-4-scout-17b-16e-instruct
-      - llama3.3-70b
+      - llama3.1-8b
+      - gpt-oss-120b
+      - qwen-3-235b-a22b-instruct-2507
+      - zai-glm-4.7
 
   grok:
     name: Grok
@@ -73,11 +75,27 @@ llm:
       - meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8
       - meta-llama/Llama-4-Scout-17B-16E-Instruct
 
+  groq:
+    name: Groq
+    env_key: GROQ_API_KEY
+    service: pipecat.services.groq.llm.GroqLLMService
+    models:
+      - llama-3.1-8b-instant
+      - llama-3.3-70b-versatile
+      - openai/gpt-oss-120b
+      - openai/gpt-oss-20b
+
 tts:
   cartesia:
     name: Cartesia
     env_key: CARTESIA_API_KEY
     service: pipecat.services.cartesia.tts.CartesiaTTSService
+    supports_speed: true
+    speed_config:
+      param: generation_config
+      min: 0.6
+      max: 1.5
+      default: 1.0
     voices:
       - id: 87748186-23bb-4158-a1eb-332911b0b708
         name: British Lady
@@ -92,6 +110,12 @@ tts:
     name: ElevenLabs
     env_key: ELEVENLABS_API_KEY
     service: pipecat.services.elevenlabs.tts.ElevenLabsTTSService
+    supports_speed: true
+    speed_config:
+      param: speed
+      min: 0.7
+      max: 1.2
+      default: 1.0
     voices:
       - id: 21m00Tcm4TlvDq8ikWAM
         name: Rachel
@@ -112,6 +136,12 @@ tts:
     name: OpenAI TTS
     env_key: OPENAI_API_KEY
     service: pipecat.services.openai.tts.OpenAITTSService
+    supports_speed: true
+    speed_config:
+      param: speed
+      min: 0.25
+      max: 4.0
+      default: 1.0
     voices:
       - id: alloy
         name: Alloy
@@ -124,6 +154,12 @@ tts:
     name: Inworld
     env_key: INWORLD_API_KEY
     service: pipecat.services.inworld.tts.InworldHttpTTSService
+    supports_speed: true
+    speed_config:
+      param: speaking_rate
+      min: 0.5
+      max: 1.5
+      default: 1.0
     voices:
       - id: default
         name: Default
@@ -144,3 +180,16 @@ stt:
     models:
       - whisper-1
       - gpt-4o-transcribe
+
+  groq:
+    name: Groq
+    env_key: GROQ_API_KEY
+    service: pipecat.services.groq.stt.GroqSTTService
+    models:
+      - whisper-large-v3-turbo
+      - whisper-large-v3
+
+  speechmatics:
+    name: Speechmatics
+    env_key: SPEECHMATICS_API_KEY
+    service: pipecat.services.speechmatics.stt.SpeechmaticsSTTService

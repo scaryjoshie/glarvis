@@ -238,8 +238,8 @@ function _connectWs() {
   ws.onclose = () => {
     console.log('[WS] Disconnected');
     ws = null;
-    if (!wsIntentionallyClosed && pc) {
-      // WebRTC is still alive — reconnect WS
+    if (!wsIntentionallyClosed) {
+      // Always reconnect WS unless user explicitly disconnected
       console.log(`[WS] Reconnecting in ${wsReconnectDelay}ms...`);
       wsReconnectTimer = setTimeout(() => {
         _connectWs();
@@ -469,15 +469,6 @@ async function clearSessionState() {
 
 export function disconnect() {
   playSound('leave');
-  wsIntentionallyClosed = true;
-  if (wsReconnectTimer) {
-    clearTimeout(wsReconnectTimer);
-    wsReconnectTimer = null;
-  }
-  if (ws) {
-    ws.close();
-    ws = null;
-  }
   if (pc) {
     pc.close();
     pc = null;

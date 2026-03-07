@@ -323,6 +323,15 @@
     else if (pendingKeyClears.stt) payload.stt.api_key = '';
 
     saveSettings(payload);
+
+    // Update local store so next open reflects the save immediately
+    settingsData.update(sd => ({
+      ...sd,
+      llm: { ...sd.llm, provider: llmProvider, model: llmModel, has_override: llmHasOverride },
+      tts: { ...sd.tts, provider: ttsProvider, voice_id: ttsVoice, has_override: ttsHasOverride },
+      stt: { ...sd.stt, provider: sttProvider, model: sttModel, has_override: sttHasOverride },
+    }));
+
     settingsOpen.set(false);
     cleanup();
   }
@@ -525,6 +534,10 @@
                 </button>
               {/if}
             </div>
+
+            {#if currentItems.length === 0 && activeTab !== 'tts'}
+              <p class="no-models-hint">No models configured. This service may not require a model selection.</p>
+            {/if}
 
             <!-- Speed (TTS only, for providers that support it) -->
             {#if activeTab === 'tts' && currentProvider?.supports_speed}
@@ -1164,5 +1177,12 @@
     font-size: 12px;
     color: var(--color-muted);
     padding: 16px;
+  }
+
+  .no-models-hint {
+    font-size: 11px;
+    color: var(--color-muted);
+    font-style: italic;
+    padding: 4px 2px 0;
   }
 </style>

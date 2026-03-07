@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import ctypes
 import json
+import os
 import subprocess
 from pathlib import Path
 
 import win32clipboard
+import win32con
 import win32gui
 import win32process
 
@@ -92,21 +94,17 @@ def get_clipboard_text() -> str | None:
 
 
 def focus_window(hwnd: int) -> bool:
-    """Bring a window to the foreground by hwnd. Returns True on success.
-
-    Uses the Alt-key trick to bypass Windows' foreground lock restrictions.
-    """
+    """Bring a window to the foreground by hwnd. Returns True on success."""
     try:
-        import win32con
-
         # Restore if minimized
         if win32gui.IsIconic(hwnd):
             win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
 
-        # Alt-key trick: press Alt to allow SetForegroundWindow from background
-        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)  # Alt down
+        # Allow our process to set the foreground window
+        ASFW_ANY = -1
+        ctypes.windll.user32.AllowSetForegroundWindow(ASFW_ANY)
+        win32gui.BringWindowToTop(hwnd)
         win32gui.SetForegroundWindow(hwnd)
-        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)  # Alt up
         return True
     except Exception:
         return False
@@ -163,7 +161,6 @@ def scan_start_apps() -> list[dict]:
 def launch_app(app_id: str) -> bool:
     """Launch an app by its AppID (from Get-StartApps). Returns True on success."""
     try:
-        import os
         os.startfile(f"shell:AppsFolder\\{app_id}")
         return True
     except Exception:
