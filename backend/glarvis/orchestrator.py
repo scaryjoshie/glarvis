@@ -21,11 +21,9 @@ from glarvis.task_manager import TaskManager, Notification, TaskState
 from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult, ToolHandle
 
 if TYPE_CHECKING:
-    from glarvis.system.monitor import SystemMonitor
-
-if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
     from pipecat.services.llm_service import LLMService
+    from glarvis.system.monitor import SystemMonitor
 
 
 class _OrchestratorToolHandle(ToolHandle):
@@ -300,6 +298,7 @@ class Orchestrator:
         injects task state, system state, and available context tools into
         the system message.
         """
+        logger.debug("[Orchestrator] prepare_for_turn called")
         self._rebuild_tools()
 
         # Distribute system state to all tools
@@ -323,10 +322,38 @@ class Orchestrator:
         if sys_summary:
             sys_section = f"[System State]\n{sys_summary}"
             snapshot = f"{snapshot}\n\n{sys_section}" if snapshot else sys_section
+        else:
+            logger.warning("[Orchestrator] No system state available for injection")
 
         content = f"{self._original_system_message}\n\n{snapshot}" if snapshot else self._original_system_message
         if self.context.messages:
             self.context.messages[0]["content"] = content
+            logger.debug(f"[Orchestrator] System message: {len(content)} chars, has_system_state={sys_summary is not None}")
+
+    # ── Input interception ────────────────────────────────────────────────────
+
+    async def try_intercept(self, text: str) -> TaskResult | None:
+        """Try to intercept user input via active session contexts.
+
+        Returns a TaskResult if a session claimed the input, None otherwise.
+        """
+        for task_id, state in self._active_contexts.items():
+            if isinstance(state.tool, SessionTool):
+                result = await state.tool.intercept(text)
+                if result is not None:
+                    logger.info(f"[Orchestrator] Input intercepted by {state.tool.name}: {text!r}")
+                    # Broadcast to transcript so the UI shows what happened
+                    await self.broadcast_transcript(
+                        "user", text, entry_type="speech",
+                    )
+                    if result.board_content:
+                        await self.broadcast_board_post(state.tool.name, result.board_content)
+                    await self.broadcast_transcript(
+                        "assistant", state.tool.name, entry_type="tool_result",
+                        tool=state.tool.name, tool_result=result.result,
+                    )
+                    return result
+        return None
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

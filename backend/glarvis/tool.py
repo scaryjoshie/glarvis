@@ -208,6 +208,16 @@ class SessionTool(AsyncTool):
         """Handle a call to one of this session's context tools."""
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
 
+    async def intercept(self, text: str) -> TaskResult | None:
+        """Try to claim a user input before the LLM sees it.
+
+        Return a TaskResult to consume the input, or None to let it through.
+        Override in subclasses that want to handle direct voice input
+        (e.g., number words for multi-choice). Must be fast — runs on
+        every transcription frame while the session context is active.
+        """
+        return None
+
     async def close(self) -> None:
         """Clean up the session. Called when the task is cancelled or dismissed."""
         pass

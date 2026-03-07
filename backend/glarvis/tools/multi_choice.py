@@ -14,6 +14,15 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 from glarvis.tool import SessionTool, TaskResult
 
 
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+    "6": 6, "7": 7, "8": 8, "9": 9, "10": 10,
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+}
+
+
 class MultiChoiceSession(SessionTool):
     name = "show_choices"
     description = "Show a popup with numbered options for the user to pick from."
@@ -93,6 +102,16 @@ class MultiChoiceSession(SessionTool):
             self._done.set()
             return self._result
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
+
+    async def intercept(self, text: str) -> TaskResult | None:
+        """Catch number words and 'dismiss' before the LLM sees them."""
+        cleaned = text.strip().lower().rstrip(".!?,")
+        if cleaned in ("dismiss", "cancel", "nevermind", "never mind"):
+            return await self.handle_context_call("dismiss")
+        n = _NUMBER_WORDS.get(cleaned)
+        if n is not None and 1 <= n <= len(self._options):
+            return await self.handle_context_call("select_option", number=n)
+        return None
 
     async def on_input(self, **kwargs) -> TaskResult:
         return TaskResult(result=None, guide="Pick a number, say something else, or say dismiss.")

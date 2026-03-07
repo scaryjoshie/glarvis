@@ -1,12 +1,19 @@
 """Frame processor that prepares context before each LLM turn.
 Sits in the pipeline right before the LLM."""
 
-from pipecat.frames.frames import Frame, LLMRunFrame
+from loguru import logger
+from pipecat.frames.frames import Frame
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+
+# Pipecat 0.0.104 uses LLMContextFrame, older versions used LLMRunFrame
+try:
+    from pipecat.frames.frames import LLMContextFrame as _TriggerFrame
+except ImportError:
+    from pipecat.frames.frames import LLMRunFrame as _TriggerFrame
 
 
 class BoardContextInjector(FrameProcessor):
-    """Intercepts LLMRunFrame and refreshes tools + system message."""
+    """Intercepts the LLM context frame and refreshes tools + system message."""
 
     def __init__(self, orchestrator):
         super().__init__()
@@ -15,7 +22,10 @@ class BoardContextInjector(FrameProcessor):
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
-        if isinstance(frame, LLMRunFrame):
-            self._orchestrator.prepare_for_turn()
+        if isinstance(frame, _TriggerFrame):
+            try:
+                self._orchestrator.prepare_for_turn()
+            except Exception as e:
+                logger.error(f"[BoardContextInjector] prepare_for_turn failed: {e}")
 
         await self.push_frame(frame, direction)

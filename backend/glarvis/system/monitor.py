@@ -15,9 +15,23 @@ from loguru import logger
 
 # Import platform-specific backend
 if sys.platform == "win32":
-    from glarvis.system.windows import get_clipboard_text, get_foreground_hwnd, get_visible_windows
+    from glarvis.system.windows import (
+        focus_window as _focus_window,
+        get_clipboard_text,
+        get_foreground_hwnd,
+        get_visible_windows,
+        launch_app as _launch_app,
+        scan_start_apps,
+    )
 else:
     raise ImportError(f"SystemMonitor not supported on {sys.platform}")
+
+
+@dataclass
+class ProgramInfo:
+    """An installed program from the Start Menu."""
+    name: str
+    app_id: str
 
 
 @dataclass
@@ -25,6 +39,7 @@ class WindowInfo:
     """A visible window with a stable integer ID for LLM use."""
     id: int               # stable integer (1, 2, 3...)
     title: str
+    app: str              # process name (e.g. "notepad", "code", "chrome")
     hwnd: int             # native handle (internal, not exposed to LLM)
     pid: int
 
@@ -49,7 +64,8 @@ class SystemState:
             lines.append(f"Windows ({len(self.windows)}):")
             for w in self.windows:
                 marker = " *" if w.id == self.foreground_id else ""
-                lines.append(f"  [{w.id}] {w.title}{marker}")
+                app_tag = f" ({w.app})" if w.app else ""
+                lines.append(f"  [{w.id}] {w.title}{app_tag}{marker}")
             if self.foreground_id is not None:
                 fg = next((w for w in self.windows if w.id == self.foreground_id), None)
                 if fg:
@@ -87,13 +103,30 @@ class SystemMonitor:
         self._hwnd_to_id: dict[int, int] = {}
         self._next_id = 1
 
+        # Installed programs (scanned once on start)
+        self.programs: list[ProgramInfo] = []
+
     def start(self):
         """Start the background polling loop."""
         if self._running:
             return
         self._running = True
+        self._scan_programs()
+        try:
+            self._update()
+        except Exception as e:
+            logger.error(f"[SystemMonitor] Initial update failed: {e}")
         self._task = asyncio.create_task(self._loop())
-        logger.info(f"[SystemMonitor] Started (interval={self.interval}s)")
+        logger.info(f"[SystemMonitor] Started (interval={self.interval}s, {len(self.programs)} programs, {len(self.state.windows)} windows)")
+
+    def _scan_programs(self):
+        """Scan installed apps via Get-StartApps (once on start)."""
+        try:
+            raw = scan_start_apps()
+            self.programs = [ProgramInfo(name=p["name"], app_id=p["app_id"]) for p in raw]
+        except Exception as e:
+            logger.error(f"[SystemMonitor] Program scan failed: {e}")
+            self.programs = []
 
     def stop(self):
         """Stop the background polling loop."""
@@ -105,9 +138,15 @@ class SystemMonitor:
 
     async def _loop(self):
         """Poll system state on interval."""
+        tick = 0
         while self._running:
             try:
                 self._update()
+                tick += 1
+                if tick <= 3 or tick % 30 == 0:  # log first 3 ticks, then every 60s
+                    fg = next((w for w in self.state.windows if w.id == self.state.foreground_id), None)
+                    fg_title = fg.title[:40] if fg else "none"
+                    logger.debug(f"[SystemMonitor] tick={tick} windows={len(self.state.windows)} fg={fg_title}")
             except Exception as e:
                 logger.error(f"[SystemMonitor] Update error: {e}")
             await asyncio.sleep(self.interval)
@@ -134,6 +173,7 @@ class SystemMonitor:
             windows.append(WindowInfo(
                 id=wid,
                 title=w["title"],
+                app=w.get("app", ""),
                 hwnd=hwnd,
                 pid=w["pid"],
             ))
@@ -148,3 +188,21 @@ class SystemMonitor:
 
         # Clipboard
         self.state.clipboard = get_clipboard_text()
+
+    # ── Actions ──────────────────────────────────────────────────────────
+
+    def focus_window(self, window_id: int) -> bool:
+        """Focus a window by its stable integer ID. Returns True on success."""
+        win = next((w for w in self.state.windows if w.id == window_id), None)
+        if not win:
+            return False
+        return _focus_window(win.hwnd)
+
+    def launch_program(self, app_id: str) -> bool:
+        """Launch a program by its AppID. Returns True on success."""
+        return _launch_app(app_id)
+
+    def search_programs(self, query: str) -> list[ProgramInfo]:
+        """Fuzzy search installed programs by name."""
+        q = query.lower()
+        return [p for p in self.programs if q in p.name.lower()]

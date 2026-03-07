@@ -37,12 +37,14 @@ from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 
 from glarvis.system import SystemMonitor
 from glarvis.context_injector import BoardContextInjector
+from glarvis.input_interceptor import InputInterceptor
 from glarvis.mute_gate import MuteGate
 from glarvis.orchestrator import Orchestrator
 from glarvis.response_capture import ResponseCapture
 from glarvis.task_manager import TaskManager
 from glarvis.tools.examples import DebugContext, EnterSession, ExitSession, GetTime, ListDirectory, ListTools, Mute, SearchFiles, WriteBoard
 from glarvis.tools.multi_choice import MultiChoiceSession
+from glarvis.tools.system_tools import FocusWindow, OpenProgram, ReadFile, SearchPrograms
 from glarvis.transcript_capture import TranscriptCapture
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
@@ -57,18 +59,28 @@ Rules:
 - Keep responses SHORT. One sentence max for most things. "Yep", "got it", "on it" are fine responses.
 - If the user is just chatting, chat back briefly. Don't over-explain or monologue.
 - Never list your capabilities or offer help unprompted. The user knows what you can do.
+- NEVER read lists aloud. Not windows, not files, not programs, not options. Post to board or use multi_choice instead.
 - Short answers (a sentence or less) can be spoken. Anything longer goes on the board.
-- Don't read out lists, file contents, or structured data — post to the board instead.
-- If you post to the board in response to the user, let them know briefly — "it's on the board", "take a look", etc. If nothing was asked, you don't need to announce it.
+- If you post to the board in response to the user, let them know briefly — "it's on the board", "take a look", etc.
 - If the user explicitly asks you to read or explain something, speak it fully.
 - No markdown, bullets, or special characters. This is spoken aloud.
+- You have live System State showing open windows, focused window, clipboard, and time. Use it — don't say you can't see what's open.
 
 Tools:
 - You can call multiple tools in one turn and chain them. Don't say you can only do one thing at a time.
 - Some tools start sessions. While a session is active, extra context tools appear in your tool list (listed in the system state below). USE them — they are real tools you can call, not suggestions.
-- When the user says a number, name, or choice that matches a context tool (like select_option), call it immediately. Don't say "I can't select for you" — you CAN, that's what the tool is for.
+- CRITICAL: When a session is active (like show_choices), the user's responses go through its context tools. If show_choices is active and the user says a number or name, call select_option — NOT focus_window or any other tool. The context tool handles it.
 - If the user wants something not in the listed options, use select_other with their request.
 - After a selection is made, continue with whatever task prompted the choice. Don't stop.
+
+Disambiguation — ALWAYS use show_choices when there are multiple options:
+- Multiple windows match (e.g. two Notepad instances) → show_choices with the window titles
+- Multiple programs match a search → show_choices with the program names
+- Any time the user needs to pick from a list → show_choices, never read options aloud
+
+Common workflows (call these tools in sequence):
+- "Open X" / "Go to X": Check the window list first. If exactly one match, focus_window(id). If multiple matches, show_choices. If not open, search_programs("X") → open_program(exact_name).
+- "Show me file X": read_file(path) posts to board.
 """
 
 app = FastAPI()
@@ -225,7 +237,8 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
     llm = AnthropicLLMService(
         api_key=os.getenv("ANTHROPIC_API_KEY"),
-        model="claude-haiku-4-5-20251001",
+        # model="claude-haiku-4-5-20251001",
+        model="claude-sonnet-4-6"
     )
 
     # Set up tools and orchestrator
@@ -239,7 +252,16 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     # Register all tools
     mute_gate = MuteGate(broadcast=broadcast)
 
-    for tool in [GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), MultiChoiceSession(), Mute(mute_gate)]:
+    # Start system monitor early so tools can reference it
+    system_monitor = SystemMonitor(interval=2.0)
+    system_monitor.start()
+
+    for tool in [
+        GetTime(), ListDirectory(), SearchFiles(), WriteBoard(),
+        MultiChoiceSession(), Mute(mute_gate),
+        FocusWindow(system_monitor), SearchPrograms(system_monitor),
+        OpenProgram(system_monitor), ReadFile(),
+    ]:
         orchestrator.register(tool)
     orchestrator.register(ListTools(orchestrator))
     orchestrator.register(DebugContext(orchestrator))
@@ -272,6 +294,7 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     orchestrator.set_broadcast(broadcast)
 
     transcript_capture = TranscriptCapture(orchestrator)
+    input_interceptor = InputInterceptor(orchestrator)
     injector = BoardContextInjector(orchestrator)
     response_capture = ResponseCapture(orchestrator)
 
@@ -281,6 +304,7 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
             stt,
             mute_gate,
             transcript_capture,
+            input_interceptor,
             user_aggregator,
             injector,
             llm,
@@ -300,11 +324,8 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
     )
 
     orchestrator.pipeline_task = task
-
-    # Start system monitor
-    system_monitor = SystemMonitor(interval=2.0)
     orchestrator.system_monitor = system_monitor
-    system_monitor.start()
+    input_interceptor.set_pipeline_task(task)
 
     global active_pipeline_task, active_orchestrator, active_mute_gate, active_system_monitor
     active_pipeline_task = task
