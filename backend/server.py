@@ -237,9 +237,10 @@ async def webrtc_ice(request: dict):
 
 
 session_lock = asyncio.Lock()
+runner_task: asyncio.Task | None = None
 
 async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
-    global session
+    global session, runner_task
 
     async with session_lock:
         # Tear down previous session
@@ -247,6 +248,9 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
             logger.info("[Server] Cancelling previous pipeline before new connection")
             await session.teardown()
             session = None
+        if runner_task and not runner_task.done():
+            runner_task.cancel()
+            runner_task = None
 
         logger.info("[Server] New WebRTC connection, building pipeline...")
 
@@ -261,22 +265,26 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
 
         session = build_session(transport, broadcast)
 
+    # Capture reference so disconnect handler only tears down its own session
+    this_session = session
+
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.info("[Server] Client connected to WebRTC")
-        await broadcast({"type": "model_info", "model_display": session.model_display})
-        await session.orchestrator.broadcast_welcome()
+        if session is this_session:
+            await broadcast({"type": "model_info", "model_display": this_session.model_display})
+            await this_session.orchestrator.broadcast_welcome()
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         global session
         logger.info("[Server] Client disconnected from WebRTC")
-        if session:
+        if session is this_session:
             await session.teardown()
             session = None
 
     runner = PipelineRunner(handle_sigint=False)
-    asyncio.create_task(runner.run(session.task))
+    runner_task = asyncio.create_task(runner.run(session.task))
 
 
 if __name__ == "__main__":

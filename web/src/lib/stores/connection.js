@@ -261,25 +261,16 @@ export async function connectWebRTC() {
     // Add mic track
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
 
-    // Play received audio through GainNode (allows volume > 100%)
+    // Play received audio
     pc.ontrack = (event) => {
       console.log('[WebRTC] Got remote track');
-      try {
-        audioCtx = new AudioContext();
-        const source = audioCtx.createMediaStreamSource(event.streams[0]);
-        voiceGain = audioCtx.createGain();
-        let vol;
-        const unsub = voiceVolume.subscribe(v => vol = v);
-        unsub();
-        voiceGain.gain.value = vol;
-        source.connect(voiceGain);
-        voiceGain.connect(audioCtx.destination);
-      } catch (e) {
-        console.warn('[WebRTC] GainNode setup failed, falling back to Audio element:', e);
-        remoteAudio = new Audio();
-        remoteAudio.srcObject = event.streams[0];
-        remoteAudio.play().catch(err => console.warn('[WebRTC] Audio autoplay blocked:', err));
-      }
+      remoteAudio = new Audio();
+      remoteAudio.srcObject = event.streams[0];
+      let vol;
+      const unsub = voiceVolume.subscribe(v => vol = v);
+      unsub();
+      remoteAudio.volume = Math.min(vol, 1.0);
+      remoteAudio.play().catch(err => console.warn('[WebRTC] Audio autoplay blocked:', err));
     };
 
     // Collect ICE candidates to send to server
@@ -358,13 +349,10 @@ export async function connectWebRTC() {
   }
 }
 
-let remoteAudio = null; // fallback only
-let audioCtx = null;
-let voiceGain = null;
+let remoteAudio = null;
 
-// Live-update voice gain when slider moves
+// Live-update volume when slider moves
 voiceVolume.subscribe(v => {
-  if (voiceGain) voiceGain.gain.value = v;
   if (remoteAudio) remoteAudio.volume = Math.min(v, 1.0);
 });
 
@@ -398,12 +386,6 @@ export function toggleMute() {
 export function toggleDeafen() {
   deafened.update(d => {
     const next = !d;
-    if (voiceGain) {
-      let vol;
-      const unsub = voiceVolume.subscribe(v => vol = v);
-      unsub();
-      voiceGain.gain.value = next ? 0 : vol;
-    }
     if (remoteAudio) remoteAudio.muted = next;
     // Deafen implies mute
     if (next && localStream) {
@@ -503,11 +485,6 @@ export function disconnect() {
   if (localStream) {
     localStream.getTracks().forEach(t => t.stop());
     localStream = null;
-  }
-  if (audioCtx) {
-    audioCtx.close().catch(() => {});
-    audioCtx = null;
-    voiceGain = null;
   }
   if (remoteAudio) {
     remoteAudio.pause();

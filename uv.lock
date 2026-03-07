@@ -695,7 +695,7 @@ source = { virtual = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "fastapi" },
-    { name = "pipecat-ai", extra = ["cartesia", "deepgram", "local", "openai", "silero", "webrtc"] },
+    { name = "pipecat-ai", extra = ["cartesia", "deepgram", "groq", "local", "openai", "silero", "webrtc"] },
     { name = "python-dotenv" },
     { name = "pywin32" },
     { name = "uvicorn" },
@@ -705,7 +705,7 @@ dependencies = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.84.0" },
     { name = "fastapi", specifier = ">=0.135.1" },
-    { name = "pipecat-ai", extras = ["cartesia", "deepgram", "local", "openai", "silero", "webrtc"], specifier = ">=0.0.104" },
+    { name = "pipecat-ai", extras = ["cartesia", "deepgram", "groq", "local", "openai", "silero", "webrtc"], specifier = ">=0.0.104" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pywin32", specifier = ">=311" },
     { name = "uvicorn", specifier = ">=0.41.0" },
@@ -732,6 +732,23 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/56/15/c25671c7aad70f8179d858c55a6ae8404902abe0cdcf32a29d581792b491/google_crc32c-1.8.0-cp314-cp314-manylinux1_x86_64.manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_5_x86_64.whl", hash = "sha256:b0d1a7afc6e8e4635564ba8aa5c0548e3173e41b6384d7711a9123165f582de2", size = 33381 },
     { url = "https://files.pythonhosted.org/packages/42/fa/f50f51260d7b0ef5d4898af122d8a7ec5a84e2984f676f746445f783705f/google_crc32c-1.8.0-cp314-cp314-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:8b3f68782f3cbd1bce027e48768293072813469af6a61a86f6bb4977a4380f21", size = 33734 },
     { url = "https://files.pythonhosted.org/packages/08/a5/7b059810934a09fb3ccb657e0843813c1fee1183d3bc2c8041800374aa2c/google_crc32c-1.8.0-cp314-cp314-win_amd64.whl", hash = "sha256:d511b3153e7011a27ab6ee6bb3a5404a55b994dc1a7322c0b87b29606d9790e2", size = 34878 },
+]
+
+[[package]]
+name = "groq"
+version = "0.23.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a6/b1/653567a92d876e3e52cdce6780ac3f6dfec5101b6c81a577e3c5abddeebe/groq-0.23.1.tar.gz", hash = "sha256:952e34895f9bfb78ab479e495d77b32180262e5c42f531ce3a1722d6e5a04dfb", size = 125359 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ae/9a/54948664261f707a24377ee7e280dbca52b7265fce8613c52dae0cbf5cf5/groq-0.23.1-py3-none-any.whl", hash = "sha256:05fa38c3d0ad03c19c6185f98f6a73901c2a463e844fd067b79f7b05c8346946", size = 127351 },
 ]
 
 [[package]]
@@ -1415,6 +1432,9 @@ cartesia = [
 deepgram = [
     { name = "deepgram-sdk" },
     { name = "websockets" },
+]
+groq = [
+    { name = "groq" },
 ]
 local = [
     { name = "pyaudio" },

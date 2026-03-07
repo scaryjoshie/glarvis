@@ -35,7 +35,7 @@
     settingsInitialized = true;
   }
 
-  $: if ($settingsOpen && !settingsInitialized) {
+  $: if ($settingsOpen && !settingsInitialized && Object.keys($settingsData.services).length > 0) {
     initFromData($settingsData);
   }
 
@@ -342,7 +342,7 @@
   }
 
   function onKeydown(e) {
-    if (e.key === 'Escape') close();
+    if (e.key === 'Escape' && $settingsOpen) close();
   }
 
   function onBackdropClick(e) {
@@ -436,7 +436,7 @@
                   type="range"
                   class="vol-slider"
                   min="0"
-                  max="2"
+                  max="1"
                   step="0.01"
                   bind:value={$voiceVolume}
                 />
