@@ -20,7 +20,7 @@ from pipecat.adapters.schemas.function_schema import FunctionSchema
 
 if TYPE_CHECKING:
     from glarvis.handle import ToolHandle
-    from glarvis.system.monitor import SystemMonitor
+    from glarvis.system.monitor import SystemMonitor, WindowInfo
 
 
 NotificationLevel = Literal["silent", "notify", "interrupt"]
@@ -203,11 +203,18 @@ class SessionTool(AsyncTool):
     ttl: int | None = None
     persist_in_display: bool = True  # session tools stay visible by default
     auto_enter_context: bool = True  # enter context automatically on run()
+    monitors_speech: bool = False  # when True, on_speech(text) is called for every STT frame
+    hides_speech: bool = False  # when True (and monitors_speech), speech doesn't reach the LLM
 
     @abstractmethod
     async def on_input(self, **kwargs) -> TaskResult:
         """Handle subsequent input to an active session."""
         ...
+
+    async def on_speech(self, text: str) -> None:
+        """Receive raw STT text when captures_speech is True.
+        Called for every transcription frame while this session's context is active."""
+        pass
 
     def get_context_tools(self) -> list[FunctionSchema]:
         """Tools available while this session's context is active.
@@ -236,3 +243,32 @@ class SessionTool(AsyncTool):
     async def close(self) -> None:
         """Clean up the session. Called when the task is cancelled or dismissed."""
         pass
+
+
+class AppSessionTool(SessionTool):
+    """Session bound to a specific app window. Mutually exclusive with other AppSessionTools.
+
+    When the matched window gains focus, the orchestrator auto-enters this session's context
+    (and exits any other AppSessionTool's context). Context tools can vary based on focus state.
+
+    Subclass and override matches_window() to define which windows belong to this tool.
+    """
+
+    auto_enter_context: bool = False  # orchestrator manages context via focus, not on spawn
+    app_name: str = ""  # process name to match (e.g. "code", "windowsterminal")
+
+    def matches_window(self, window: WindowInfo) -> bool:
+        """Does this window belong to this tool's app?
+        Default: matches on app_name. Override for custom logic."""
+        return bool(self.app_name) and window.app == self.app_name
+
+    @property
+    def is_focused(self) -> bool:
+        """Is this tool's app currently in the foreground?"""
+        if not self.system:
+            return False
+        fg = self.system.state.foreground_id
+        if fg is None:
+            return False
+        win = next((w for w in self.system.state.windows if w.id == fg), None)
+        return win is not None and self.matches_window(win)

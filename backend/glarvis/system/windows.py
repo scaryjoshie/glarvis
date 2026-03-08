@@ -268,6 +268,82 @@ def scan_start_apps() -> list[dict]:
         return []
 
 
+def set_clipboard_text(text: str) -> bool:
+    """Set clipboard to the given text. Returns True on success."""
+    try:
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
+        return True
+    except Exception:
+        return False
+
+
+def paste_text(text: str) -> bool:
+    """Paste text into the currently focused window via clipboard + Ctrl+V.
+
+    Saves the existing clipboard, sets the text, sends Ctrl+V, then restores.
+    """
+    import time
+
+    # Save existing clipboard
+    old_clip = get_clipboard_text()
+
+    if not set_clipboard_text(text):
+        return False
+
+    # Small delay so clipboard is ready
+    time.sleep(0.05)
+
+    # Send Ctrl+V via SendInput
+    VK_CONTROL = 0x11
+    VK_V = 0x56
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+
+    # Each INPUT struct is 40 bytes on 64-bit Windows
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.c_ushort),
+            ("wScan", ctypes.c_ushort),
+            ("dwFlags", ctypes.c_ulong),
+            ("time", ctypes.c_ulong),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        class _INPUT(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT), ("_pad", ctypes.c_byte * 32)]
+        _fields_ = [("type", ctypes.c_ulong), ("_input", _INPUT)]
+
+    def make_key(vk, flags=0):
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp._input.ki.wVk = vk
+        inp._input.ki.dwFlags = flags
+        return inp
+
+    inputs = (INPUT * 4)(
+        make_key(VK_CONTROL),
+        make_key(VK_V),
+        make_key(VK_V, KEYEVENTF_KEYUP),
+        make_key(VK_CONTROL, KEYEVENTF_KEYUP),
+    )
+    ctypes.windll.user32.SendInput(4, inputs, ctypes.sizeof(INPUT))
+
+    # Give the target app time to process the paste
+    time.sleep(0.1)
+
+    # Restore old clipboard
+    if old_clip is not None:
+        set_clipboard_text(old_clip)
+
+    return True
+
+
 def launch_app(app_id: str) -> bool:
     """Launch an app by its AppID (from Get-StartApps). Returns True on success."""
     try:

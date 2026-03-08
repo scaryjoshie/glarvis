@@ -82,26 +82,52 @@ export async function openPopup(popupType, toolName, data) {
   const routeStr = encodeURIComponent(JSON.stringify({ popupType, toolName }));
   const label = `popup_${toolName}`;
 
-  // Scale height to content: ~49px per option + prompt(45) + bottom row(46) + popup padding(16)
-  const optionCount = data?.options?.length || 3;
-  const height = Math.min(optionCount * 49 + 120, 640);
+  // Window sizing per popup type
+  let width = 520;
+  let height = 400;
+  let resizable = false;
+  let center = true;
+  let transparent = false;
+  let x = undefined;
+  let y = undefined;
+
+  if (popupType === 'multi_choice') {
+    // Scale height to content: ~49px per option + prompt(45) + bottom row(46) + popup padding(16)
+    const optionCount = data?.options?.length || 3;
+    height = Math.min(optionCount * 49 + 120, 640);
+  } else if (popupType === 'transcriber') {
+    // Minimized: small pill at bottom-center
+    width = 520;
+    height = 56;
+    center = false;
+    x = Math.round(screen.width / 2 - 260);
+    y = screen.height - 120;
+    resizable = true;
+    transparent = true;
+  }
 
   console.log('[Popup] Opening Tauri window:', popupType, toolName);
-  const overlay = new WebviewWindow(label, {
+  const opts = {
     url: `popup.html#${routeStr}`,
     title: 'Minerva',
-    width: 520,
+    width,
     height,
     decorations: false,
     alwaysOnTop: true,
-    center: true,
-    resizable: false,
+    transparent,
+    shadow: !transparent,
+    resizable,
     skipTaskbar: true,
-    focus: true,
-  });
+    focus: popupType !== 'transcriber',
+  };
+  if (center) opts.center = true;
+  if (x !== undefined) { opts.x = x; opts.y = y; }
+  const overlay = new WebviewWindow(label, opts);
 
   pendingPopupData.set(label, data);
-  overlay.once('tauri://created', () => overlay.setFocus());
+  if (popupType !== 'transcriber') {
+    overlay.once('tauri://created', () => overlay.setFocus());
+  }
 
   openPopups.set(toolName, overlay);
 }
@@ -222,6 +248,16 @@ function _connectWs() {
         break;
       case 'popup_close':
         closePopup(msg.tool_name);
+        break;
+      case 'transcriber_update':
+        try {
+          emitTo('popup_transcribe', 'transcriber-update', { text: msg.text });
+        } catch {}
+        break;
+      case 'transcriber_state':
+        try {
+          emitTo('popup_transcribe', 'transcriber-state', { paused: msg.paused });
+        } catch {}
         break;
       case 'model_info':
         modelDisplay.set(msg.model_display);

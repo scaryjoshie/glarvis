@@ -20,7 +20,7 @@ from pipecat.services.llm_service import FunctionCallParams
 from glarvis.prompt import build_system_message
 from glarvis.task_manager import TaskManager, Notification, TaskState
 from glarvis.handle import ToolHandle
-from glarvis.tool import AsyncTool, BaseTool, Function, Keyword, SessionTool, TaskResult
+from glarvis.tool import AppSessionTool, AsyncTool, BaseTool, Function, Keyword, SessionTool, TaskResult
 
 if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
@@ -155,6 +155,13 @@ class Orchestrator:
             return False
         if task_id in self._active_contexts:
             return True
+
+        # AppSessionTools are mutually exclusive — exit other app sessions
+        if isinstance(state.tool, AppSessionTool):
+            for other_id, other_state in list(self._active_contexts.items()):
+                if isinstance(other_state.tool, AppSessionTool) and other_id != task_id:
+                    self.exit_context(other_id)
+
         self._active_contexts[task_id] = state
         self._rebuild_tools()
         self._register_context_intercepts(task_id, state.tool)
@@ -337,11 +344,18 @@ class Orchestrator:
             if info:
                 context_infos[task_id] = (state.tool.name, info)
 
+        # Build list of all currently callable tools
+        available_tools = list(self._tools.keys())
+        for task_id, state in self._active_contexts.items():
+            for schema in state.tool.get_context_tools():
+                available_tools.append(schema.name)
+
         sys_state = self.system_monitor.state if self.system_monitor else None
         content = build_system_message(
             task_snapshot=self.task_manager.snapshot(),
             active_contexts=active_contexts,
             context_infos=context_infos,
+            available_tools=available_tools,
             system_state=sys_state,
         )
 
@@ -454,6 +468,35 @@ class Orchestrator:
             if isinstance(state.tool, SessionTool) and state.tool.name == tool_name:
                 return state
         return None
+
+    # ── Speech monitoring ────────────────────────────────────────────────────────
+
+    def get_speech_monitors(self) -> list[tuple[SessionTool, bool]]:
+        """Return active sessions monitoring speech: list of (tool, mutes_llm)."""
+        monitors = []
+        for state in self._active_contexts.values():
+            if isinstance(state.tool, SessionTool) and state.tool.monitors_speech:
+                monitors.append((state.tool, state.tool.hides_speech))
+        return monitors
+
+    # ── Focus change handling ─────────────────────────────────────────────────
+
+    def on_focus_change(self, old_id: int | None, new_id: int | None):
+        """Called by SystemMonitor when the foreground window changes.
+        Auto-enters matching AppSessionTool contexts."""
+        if new_id is None or not self.system_monitor:
+            return
+        win = next((w for w in self.system_monitor.state.windows if w.id == new_id), None)
+        if not win:
+            return
+
+        # Find an active AppSessionTool that matches the newly focused window
+        for task_id, state in self.task_manager.active.items():
+            if isinstance(state.tool, AppSessionTool) and state.tool.matches_window(win):
+                if task_id not in self._active_contexts:
+                    self.enter_context(task_id)
+                    logger.info(f"[Orchestrator] Focus → entered app context: {state.tool.name}")
+                return
 
     # ── TaskManager callbacks ────────────────────────────────────────────────
 

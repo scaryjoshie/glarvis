@@ -41,5 +41,24 @@ class ToolHandle:
             "type": "popup_close", "tool_name": name,
         })
 
+    async def broadcast(self, msg: dict) -> None:
+        """Send an arbitrary WebSocket message to all clients."""
+        await self._orch._broadcast_msg(msg)
+
+    async def inject_llm_message(self, text: str) -> None:
+        """Inject a message into the pipeline to trigger an LLM turn.
+
+        The message bypasses speech monitors (uses user_id='system').
+        """
+        import time
+        from pipecat.frames.frames import TranscriptionFrame
+        if self._orch.pipeline_task:
+            frame = TranscriptionFrame(
+                text=text,
+                user_id="system",
+                timestamp=str(time.time()),
+            )
+            await self._orch.pipeline_task.queue_frame(frame)
+
     async def execute_tool(self, tool_name: str, **kwargs) -> TaskResult:
         return await self._orch.execute_tool(tool_name, kwargs)

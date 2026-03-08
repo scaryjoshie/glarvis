@@ -10,6 +10,7 @@ import asyncio
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Callable
 
 from loguru import logger
 
@@ -96,7 +97,7 @@ class SystemMonitor:
         monitor.stop()        # clean shutdown
     """
 
-    def __init__(self, interval: float = 2.0):
+    def __init__(self, interval: float = 0.5):
         self.interval = interval
         self.state = SystemState()
         self._task: asyncio.Task | None = None
@@ -111,6 +112,9 @@ class SystemMonitor:
 
         # Icon cache: exe_path → base64 PNG (or None for failed extractions)
         self._icon_cache: dict[str, str | None] = {}
+
+        # Focus change callback: (old_window_id | None, new_window_id | None) -> None
+        self.on_focus_change: Callable[[int | None, int | None], None] | None = None
 
     def start(self):
         """Start the background polling loop."""
@@ -149,7 +153,7 @@ class SystemMonitor:
             try:
                 self._update()
                 tick += 1
-                if tick <= 3 or tick % 30 == 0:  # log first 3 ticks, then every 60s
+                if tick <= 3 or tick % 120 == 0:  # log first 3 ticks, then every 60s
                     fg = next((w for w in self.state.windows if w.id == self.state.foreground_id), None)
                     fg_title = fg.title[:40] if fg else "none"
                     logger.debug(f"[SystemMonitor] tick={tick} windows={len(self.state.windows)} fg={fg_title}")
@@ -191,7 +195,15 @@ class SystemMonitor:
             del self._hwnd_to_id[h]
 
         self.state.windows = windows
-        self.state.foreground_id = self._hwnd_to_id.get(fg_hwnd) if fg_hwnd else None
+        new_fg = self._hwnd_to_id.get(fg_hwnd) if fg_hwnd else None
+        old_fg = self.state.foreground_id
+        self.state.foreground_id = new_fg
+
+        if new_fg != old_fg and self.on_focus_change:
+            try:
+                self.on_focus_change(old_fg, new_fg)
+            except Exception as e:
+                logger.error(f"[SystemMonitor] Focus change callback error: {e}")
 
         # Clipboard
         self.state.clipboard = get_clipboard_text()

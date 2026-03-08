@@ -24,6 +24,17 @@
 
 ## Done
 
+- ToolHandle consolidation — single concrete `ToolHandle` in `handle.py`, removed abstract class from `tool.py` and `_OrchestratorToolHandle` from `orchestrator.py`, `BaseTool.system` is now a convenience property via handle
+- Intercept system — `Keyword`/`Function` types in `tool.py`, global + context scoped registry in orchestrator, `try_intercept()` dispatch pipeline, `get_intercepts()` on BaseTool, `get_context_intercepts()` on SessionTool
+- Window icons — `get_hwnd_icon()` (WM_GETICON, works for UWP/ApplicationFrameHost), `get_exe_icon()` fallback, cached by exe path in SystemMonitor, passed as `_icons` side channel (never in LLM context)
+- SwitchWindow tool — global "switch" keyword intercept, shows multi-choice with app icons
+- Mute keyword intercept — "mute"/"mute me" bypass LLM entirely
+- Auto-dismiss transient sessions — `persist_in_display=False` sessions dismissed when LLM calls base tools directly
+- Silent spawn for transient sessions — no LLM narration for pickers like show_choices
+- `get_context_info()` on SessionTool — injects session state into system message each turn
+- `_`-prefixed kwargs convention — side-channel data stripped from transcript broadcast
+- Ghost window filtering — `_NOISE_APPS` set (systemsettings) in windows.py
+- Shutdown/Restart tools — kill project processes by PID (Tauri app, node/vite), restart via detached `.restart.bat` + `start.sh`
 - SystemMonitor — background polling loop, WindowInfo with stable integer IDs, clipboard, foreground tracking, installed programs via Get-StartApps
 - Real tools — `focus_window`, `search_programs`, `open_program`, `read_file` (all using SystemMonitor)
 - Service registry — YAML-driven config for LLM/TTS/STT providers, dynamic class importing, CRUD API, settings modal

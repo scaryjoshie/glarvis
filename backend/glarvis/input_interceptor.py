@@ -1,5 +1,9 @@
-"""Intercepts user transcriptions before the LLM when active sessions
-can handle them directly (e.g., number words during multi-choice).
+"""Intercepts user transcriptions before the LLM.
+
+Two mechanisms:
+1. Speech monitors — sessions with monitors_speech=True get on_speech() calls.
+   If any monitor has hides_speech=True, the LLM doesn't see the speech.
+2. Intercept chain — keyword/function pattern matching for specific phrases.
 
 Sits after TranscriptCapture, before UserAggregator in the pipeline.
 """
@@ -9,7 +13,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from loguru import logger
-from pipecat.frames.frames import Frame, TranscriptionFrame
+from pipecat.frames.frames import (
+    Frame,
+    TranscriptionFrame,
+    UserStartedSpeakingFrame,
+    UserStoppedSpeakingFrame,
+)
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 
 if TYPE_CHECKING:
@@ -17,28 +26,59 @@ if TYPE_CHECKING:
 
 
 class InputInterceptor(FrameProcessor):
-    """Checks if active session contexts want to claim user input.
+    """Routes STT output to speech monitors and/or intercept handlers.
 
-    If a session's intercept() returns a result, the frame's text is
-    replaced with the result guide and pushed downstream normally.
-    The natural VAD stop event that follows speech triggers the LLM turn.
+    Speech monitors get on_speech() for every transcription. If any monitor
+    hides speech, the frame and subsequent VAD stop are suppressed.
+
+    Intercepts run after monitors (only if speech isn't hidden).
     """
 
     def __init__(self, orchestrator: Orchestrator):
         super().__init__()
         self._orchestrator = orchestrator
+        self._suppress_stop = False
 
     async def process_frame(self, frame: Frame, direction: FrameDirection):
         await super().process_frame(frame, direction)
 
+        if isinstance(frame, UserStartedSpeakingFrame):
+            self._suppress_stop = False
+            await self.push_frame(frame, direction)
+            return
+
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
+            # System-injected frames bypass speech monitors and intercepts
+            if frame.user_id in ("system", "popup"):
+                await self.push_frame(frame, direction)
+                return
+
+            # 1. Speech monitors (real user speech only)
+            monitors = self._orchestrator.get_speech_monitors()
+            hidden = False
+            for tool, hides in monitors:
+                await tool.on_speech(frame.text)
+                if hides:
+                    hidden = True
+
+            if hidden:
+                self._suppress_stop = True
+                return
+
+            # 2. Intercept chain (keywords, functions)
             result = await self._orchestrator.try_intercept(frame.text)
             if result is not None:
                 logger.info(f"[InputInterceptor] Intercepted: {frame.text!r} → {result.guide!r}")
                 if result.guide:
-                    # Replace the text and let it flow through naturally
                     frame.text = f"[{result.guide}]"
                     await self.push_frame(frame, direction)
-                return  # either pushed modified frame or consumed silently
+                else:
+                    self._suppress_stop = True
+                return
+
+        if isinstance(frame, UserStoppedSpeakingFrame) and self._suppress_stop:
+            logger.debug("[InputInterceptor] Suppressed stop frame")
+            self._suppress_stop = False
+            return
 
         await self.push_frame(frame, direction)

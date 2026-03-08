@@ -32,6 +32,7 @@ from glarvis.tools.general import (
 )
 from glarvis.settings import load_settings
 from glarvis.tools.multi_choice import MultiChoiceSession
+from glarvis.tools.transcriber import TranscriberSession
 from glarvis.transcript_capture import TranscriptCapture
 
 
@@ -76,18 +77,19 @@ def build_session(
     
     # Mute gate and system monitor
     mute_gate = MuteGate(broadcast=broadcast)
-    system_monitor = SystemMonitor(interval=2.0)
+    system_monitor = SystemMonitor()
     system_monitor.start()
 
     orchestrator = Orchestrator(
-        task_manager, llm, context, 
+        task_manager, llm, context,
         broadcast=broadcast, system_monitor=system_monitor
     )
+    system_monitor.on_focus_change = orchestrator.on_focus_change
 
     # Register all tools
     for tool in [
         GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), CloseBoard(),
-        MultiChoiceSession(), Mute(mute_gate), SwitchWindow(),
+        MultiChoiceSession(), TranscriberSession(), Mute(mute_gate), SwitchWindow(),
         FocusWindow(), SearchPrograms(), OpenProgram(), ReadFile(),
     ]:
         orchestrator.register(tool)

@@ -13,6 +13,8 @@
     "core:window:allow-is-focused",
     "core:window:allow-start-dragging",
     "core:window:allow-start-resize-dragging",
+    "core:window:allow-set-size",
+    "core:window:allow-set-position",
     "core:webview:allow-create-webview-window",
     "core:event:default"
   ]

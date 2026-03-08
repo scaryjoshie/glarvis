@@ -179,18 +179,16 @@ class TaskManager:
             status = state.tool.task_display_status(elapsed)
             if state.progress:
                 status += f' -- "{state.progress}"'
-            lines.append(f"  Running: {status}")
+            lines.append(f"  [ACTIVE] {status}")
 
-        # Show recent completions that might be relevant
         for state in list(self.history)[-5:]:
             if state.status == "completed" and state.result and state.result.guide:
-                lines.append(f"  Completed: {state.tool.name} -- {state.result.guide}")
+                lines.append(f"  [DONE] {state.tool.name} -- {state.result.guide}")
             elif state.status == "failed" and state.result and state.result.guide:
-                lines.append(f"  Failed: {state.tool.name} -- {state.result.guide}")
+                lines.append(f"  [FAILED] {state.tool.name} -- {state.result.guide}")
 
-        # Pending notifications the agent should be aware of
         for notif in self.pending_notifications:
-            lines.append(f"  Notification (user was notified): {notif.message}")
+            lines.append(f"  [NOTIFIED] {notif.message}")
 
         if not lines:
             return None
