@@ -14,9 +14,13 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal, TYPE_CHECKING
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
+
+if TYPE_CHECKING:
+    from glarvis.handle import ToolHandle
+    from glarvis.system.monitor import SystemMonitor
 
 
 NotificationLevel = Literal["silent", "notify", "interrupt"]
@@ -33,32 +37,21 @@ class TaskResult:
     notify: bool = False  # show as popup when main app not focused
 
 
-class ToolHandle:
-    """Scoped API for tool-to-system communication. Set by orchestrator at registration.
+# ── Intercept types ──────────────────────────────────────────────────────
 
-    Decouples tools from orchestrator internals. Tools use self.handle.post_to_board()
-    instead of reaching into the orchestrator.
-    """
+@dataclass
+class Keyword:
+    """Exact keyword match → handler() with no args."""
+    word: str
+    handler: Callable  # async () -> TaskResult | None
 
-    async def post_to_board(self, content: str, author: str | None = None) -> int:
-        """Post markdown to the board. Returns post index."""
-        raise NotImplementedError
+@dataclass
+class Function:
+    """Custom matcher → handler(cleaned_text)."""
+    handler: Callable  # async (text: str) -> TaskResult | None
 
-    async def open_popup(self, popup_type: str, data: dict) -> None:
-        """Tell frontend to open a popup window."""
-        raise NotImplementedError
+Intercept = Keyword | Function
 
-    async def close_popup(self) -> None:
-        """Tell frontend to close this tool's popup."""
-        raise NotImplementedError
-
-    async def close_named_popup(self, name: str) -> None:
-        """Tell frontend to close a popup by name."""
-        raise NotImplementedError
-
-    async def execute_tool(self, tool_name: str, **kwargs) -> TaskResult:
-        """Programmatically execute another tool as if the LLM called it."""
-        raise NotImplementedError
 
 class BaseTool(ABC):
     """Abstract base for all tools. Do not subclass directly —
@@ -74,10 +67,13 @@ class BaseTool(ABC):
     notification: NotificationLevel = "silent"
     display: DisplayMode = "none"
     cancel_on_interruption: bool = True
-    shortcuts: list[str] = []  # voice keywords that trigger this tool directly (bypass LLM)
 
     # ── Set by orchestrator at registration ─────────────────────────────
     handle: ToolHandle | None = None
+
+    @property
+    def system(self) -> SystemMonitor | None:
+        return self.handle.system if self.handle else None
 
     # ── Core execution ────────────────────────────────────────────────────
 
@@ -85,6 +81,12 @@ class BaseTool(ABC):
     async def run(self, **kwargs) -> TaskResult:
         """Execute the tool. Override this in subclasses."""
         ...
+
+    # ── Intercepts ────────────────────────────────────────────────────────
+
+    def get_intercepts(self) -> list[Intercept]:
+        """Global intercepts. Called once at orchestrator.register() time. Always active."""
+        return []
 
     # ── Pipecat integration ───────────────────────────────────────────────
 
@@ -221,15 +223,10 @@ class SessionTool(AsyncTool):
         """Whether the session has resolved. Checked after intercept to auto-exit context."""
         return False
 
-    async def intercept(self, text: str) -> TaskResult | None:
-        """Try to claim a user input before the LLM sees it.
-
-        Return a TaskResult to consume the input, or None to let it through.
-        Override in subclasses that want to handle direct voice input
-        (e.g., number words for multi-choice). Must be fast — runs on
-        every transcription frame while the session context is active.
-        """
-        return None
+    def get_context_intercepts(self) -> list[Intercept]:
+        """Context intercepts. Called at enter_context(), removed at exit_context().
+        Override to register keywords/functions active only while this session's context is active."""
+        return []
 
     async def close(self) -> None:
         """Clean up the session. Called when the task is cancelled or dismissed."""

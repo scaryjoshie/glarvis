@@ -19,42 +19,14 @@ from pipecat.services.llm_service import FunctionCallParams
 
 from glarvis.prompt import build_system_message
 from glarvis.task_manager import TaskManager, Notification, TaskState
-from glarvis.tool import AsyncTool, BaseTool, SessionTool, TaskResult, ToolHandle
+from glarvis.handle import ToolHandle
+from glarvis.tool import AsyncTool, BaseTool, Function, Keyword, SessionTool, TaskResult
 
 if TYPE_CHECKING:
     from pipecat.pipeline.task import PipelineTask
     from pipecat.services.llm_service import LLMService
     from glarvis.system.monitor import SystemMonitor
 
-
-class _OrchestratorToolHandle(ToolHandle):
-    """Concrete ToolHandle backed by the orchestrator."""
-
-    def __init__(self, orch: Orchestrator, tool_name: str):
-        self._orch = orch
-        self._name = tool_name
-
-    async def post_to_board(self, content: str, author: str | None = None) -> int:
-        return await self._orch.broadcast_board_post(author or self._name, content)
-
-    async def open_popup(self, popup_type: str, data: dict) -> None:
-        await self._orch._broadcast_msg({
-            "type": "popup_open", "popup_type": popup_type,
-            "tool_name": self._name, "data": data,
-        })
-
-    async def close_popup(self) -> None:
-        await self._orch._broadcast_msg({
-            "type": "popup_close", "tool_name": self._name,
-        })
-
-    async def close_named_popup(self, name: str) -> None:
-        await self._orch._broadcast_msg({
-            "type": "popup_close", "tool_name": name,
-        })
-
-    async def execute_tool(self, tool_name: str, **kwargs) -> TaskResult:
-        return await self._orch.execute_tool(tool_name, kwargs)
 
 class Orchestrator:
     def __init__(
@@ -77,7 +49,13 @@ class Orchestrator:
 
         self._active_contexts: dict[str, TaskState] = {}  # task_id → TaskState
         self._context_tool_map: dict[str, str] = {}  # context tool name → task_id
-        self._shortcuts: dict[str, str] = {}  # keyword → tool name
+
+        # Intercept registry
+        self._global_keywords: dict[str, Keyword] = {}  # cleaned word → Keyword
+        self._global_functions: list[Function] = []
+        self._context_keywords: dict[str, Keyword] = {}  # cleaned word → Keyword
+        self._context_functions: list[Function] = []
+        self._context_intercepts: dict[str, list] = {}  # task_id → intercepts (for cleanup)
 
         self.task_manager.on_notification = self._on_notification
         self.task_manager.on_change = self._on_task_change
@@ -136,11 +114,25 @@ class Orchestrator:
 
     def register(self, tool: BaseTool):
         self._tools[tool.name] = tool
-        tool.handle = _OrchestratorToolHandle(self, tool.name)
+        tool.handle = ToolHandle(self, tool.name)
         self._register_handler(tool.name)
-        for keyword in tool.shortcuts:
-            self._shortcuts[keyword.lower()] = tool.name
-        logger.info(f"[Orchestrator] Registered: {tool.name}" + (f" (shortcuts: {tool.shortcuts})" if tool.shortcuts else ""))
+
+        # Collect global intercepts
+        intercepts = tool.get_intercepts()
+        for intercept in intercepts:
+            if isinstance(intercept, Keyword):
+                self._global_keywords[intercept.word.lower()] = intercept
+            elif isinstance(intercept, Function):
+                self._global_functions.append(intercept)
+
+        kw_names = [i.word for i in intercepts if isinstance(i, Keyword)]
+        fn_count = sum(1 for i in intercepts if isinstance(i, Function))
+        extra = ""
+        if kw_names:
+            extra += f" (keywords: {kw_names})"
+        if fn_count:
+            extra += f" ({fn_count} function{'s' if fn_count > 1 else ''})"
+        logger.info(f"[Orchestrator] Registered: {tool.name}{extra}")
 
     def _register_handler(self, tool_name: str):
         async def _handler(params: FunctionCallParams):
@@ -164,6 +156,7 @@ class Orchestrator:
             return True
         self._active_contexts[task_id] = state
         self._rebuild_tools()
+        self._register_context_intercepts(task_id, state.tool)
         self._on_task_change()
         logger.info(f"[Orchestrator] Entered context: {task_id} ({state.tool.name})")
         return True
@@ -172,6 +165,7 @@ class Orchestrator:
         if not self._active_contexts.pop(task_id, None):
             return False
         self._rebuild_tools()
+        self._unregister_context_intercepts(task_id)
         self._on_task_change()
         logger.info(f"[Orchestrator] Exited context: {task_id}")
         return True
@@ -318,17 +312,13 @@ class Orchestrator:
         logger.debug("[Orchestrator] prepare_for_turn called")
         self._rebuild_tools()
 
-        # Distribute system state to all tools
-        sys_state = self.system_monitor.state if self.system_monitor else None
-        for tool in self._tools.values():
-            tool.system = sys_state
-
         # Gather active context info
         active_contexts = {}
         for task_id, state in self._active_contexts.items():
             tool_names = [t.name for t in state.tool.get_context_tools()]
             active_contexts[task_id] = (state.tool.name, tool_names)
 
+        sys_state = self.system_monitor.state if self.system_monitor else None
         content = build_system_message(
             task_snapshot=self.task_manager.snapshot(),
             active_contexts=active_contexts,
@@ -342,43 +332,89 @@ class Orchestrator:
     # ── Input interception ────────────────────────────────────────────────────
 
     async def try_intercept(self, text: str) -> TaskResult | None:
-        """Try to intercept user input via shortcuts or active session contexts.
+        """Run the intercept pipeline: global keywords → context keywords → global fns → context fns.
 
         Returns a TaskResult if claimed, None otherwise.
         """
-        # Global shortcuts (bypass LLM entirely)
-        result = await self._try_shortcut(text)
-        if result is not None:
-            return result
-
-        for task_id, state in list(self._active_contexts.items()):
-            if isinstance(state.tool, SessionTool):
-                result = await state.tool.intercept(text)
-                if result is not None:
-                    logger.info(f"[Orchestrator] Input intercepted by {state.tool.name}: {text!r}")
-                    await self.broadcast_transcript(
-                        "user", text, entry_type="speech",
-                    )
-                    if result.board_content:
-                        await self.broadcast_board_post(state.tool.name, result.board_content)
-                    await self.broadcast_transcript(
-                        "assistant", state.tool.name, entry_type="tool_result",
-                        tool=state.tool.name, tool_result=result.result,
-                    )
-                    if state.tool.is_done:
-                        self.exit_context(task_id)
-                    return result
-        return None
-
-    # ── Global shortcuts ──────────────────────────────────────────────────────
-
-    async def _try_shortcut(self, text: str) -> TaskResult | None:
         cleaned = text.strip().lower().rstrip(".!?,")
-        tool_name = self._shortcuts.get(cleaned)
-        if tool_name and tool_name in self._tools:
-            logger.info(f"[Orchestrator] Shortcut: {cleaned!r} → {tool_name}")
-            return await self.execute_tool(tool_name, {})
+        if not cleaned:
+            return None
+
+        # 1. Global keywords (O(1))
+        kw = self._global_keywords.get(cleaned)
+        if kw:
+            result = await kw.handler()
+            if result is not None:
+                logger.info(f"[Orchestrator] Global keyword intercepted: {cleaned!r}")
+                return result
+
+        # 2. Context keywords (O(1))
+        kw = self._context_keywords.get(cleaned)
+        if kw:
+            result = await kw.handler()
+            if result is not None:
+                logger.info(f"[Orchestrator] Context keyword intercepted: {cleaned!r}")
+                await self._post_intercept(text, result)
+                return result
+
+        # 3. Global functions (sequential)
+        for fn in self._global_functions:
+            result = await fn.handler(cleaned)
+            if result is not None:
+                logger.info(f"[Orchestrator] Global function intercepted: {cleaned!r}")
+                return result
+
+        # 4. Context functions (sequential)
+        for fn in self._context_functions:
+            result = await fn.handler(cleaned)
+            if result is not None:
+                logger.info(f"[Orchestrator] Context function intercepted: {cleaned!r}")
+                await self._post_intercept(text, result)
+                return result
+
         return None
+
+    async def _post_intercept(self, text: str, result: TaskResult):
+        """Broadcast transcript and check for session completion after a context intercept."""
+        await self.broadcast_transcript("user", text, entry_type="speech")
+        if result.board_content:
+            # Find the owning session for the board post author
+            author = "session"
+            for state in self._active_contexts.values():
+                if isinstance(state.tool, SessionTool):
+                    author = state.tool.name
+                    break
+            await self.broadcast_board_post(author, result.board_content)
+        await self.broadcast_transcript(
+            "assistant", "intercept", entry_type="tool_result",
+            tool_result=result.result,
+        )
+        # Auto-exit completed sessions
+        for task_id, state in list(self._active_contexts.items()):
+            if isinstance(state.tool, SessionTool) and state.tool.is_done:
+                self.exit_context(task_id)
+
+    def _register_context_intercepts(self, task_id: str, tool: SessionTool):
+        """Collect context intercepts from a session and add to the registry."""
+        intercepts = tool.get_context_intercepts()
+        self._context_intercepts[task_id] = intercepts
+        for intercept in intercepts:
+            if isinstance(intercept, Keyword):
+                self._context_keywords[intercept.word.lower()] = intercept
+            elif isinstance(intercept, Function):
+                self._context_functions.append(intercept)
+
+    def _unregister_context_intercepts(self, task_id: str):
+        """Remove context intercepts for a session."""
+        intercepts = self._context_intercepts.pop(task_id, [])
+        for intercept in intercepts:
+            if isinstance(intercept, Keyword):
+                self._context_keywords.pop(intercept.word.lower(), None)
+            elif isinstance(intercept, Function):
+                try:
+                    self._context_functions.remove(intercept)
+                except ValueError:
+                    pass
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

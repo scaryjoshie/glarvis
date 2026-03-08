@@ -88,8 +88,7 @@ def build_session(
     for tool in [
         GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), CloseBoard(),
         MultiChoiceSession(), Mute(mute_gate), SwitchWindow(),
-        FocusWindow(system_monitor), SearchPrograms(system_monitor),
-        OpenProgram(system_monitor), ReadFile(),
+        FocusWindow(), SearchPrograms(), OpenProgram(), ReadFile(),
     ]:
         orchestrator.register(tool)
     orchestrator.register(ListTools(orchestrator))

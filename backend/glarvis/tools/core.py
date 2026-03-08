@@ -155,6 +155,16 @@ class DebugContext(InlineTool):
         else:
             lines.append("*No system monitor attached to orchestrator.*")
 
+        # Intercept registry
+        orch = self._orchestrator
+        lines.append("\n## Intercepts\n")
+        gk = list(orch._global_keywords.keys())
+        ck = list(orch._context_keywords.keys())
+        lines.append(f"*Global keywords: {gk if gk else 'none'}*")
+        lines.append(f"*Global functions: {len(orch._global_functions)}*")
+        lines.append(f"*Context keywords: {ck if ck else 'none'}*")
+        lines.append(f"*Context functions: {len(orch._context_functions)}*")
+
         snapshot = self._orchestrator.task_manager.snapshot()
         lines.append("\n## Task Manager Snapshot\n")
         if snapshot:

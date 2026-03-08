@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import TYPE_CHECKING
 
-from glarvis.tool import AsyncTool, InlineTool, TaskResult
-
-if TYPE_CHECKING:
-    from glarvis.system.monitor import SystemMonitor
+from glarvis.tool import AsyncTool, Intercept, InlineTool, Keyword, TaskResult
 
 
 class GetTime(InlineTool):
@@ -131,16 +127,18 @@ class SwitchWindow(InlineTool):
         "Show a popup with all open windows to switch to. "
         "Use when the user says 'switch' without specifying a window."
     )
-    shortcuts = ["switch"]
+
+    def get_intercepts(self) -> list[Intercept]:
+        return [Keyword("switch", self.run)]
 
     async def run(self, **kwargs) -> TaskResult:
-        if not self.system or not self.system.windows:
+        if not self.system or not self.system.state.windows:
             return TaskResult(result="No windows detected", guide="No windows open")
 
         options = []
-        for w in self.system.windows:
+        for w in self.system.state.windows:
             label = f"{w.title} ({w.app})" if w.app else w.title
-            if w.id == self.system.foreground_id:
+            if w.id == self.system.state.foreground_id:
                 label += " *"
             options.append({
                 "text": label,
@@ -163,14 +161,11 @@ class FocusWindow(InlineTool):
     }
     required = ["id"]
 
-    def __init__(self, monitor: SystemMonitor):
-        self._monitor = monitor
-
     async def run(self, id: int = 0, **kwargs) -> TaskResult:
-        win = next((w for w in self._monitor.state.windows if w.id == id), None)
+        win = next((w for w in self.system.state.windows if w.id == id), None)
         if not win:
             return TaskResult(result=f"Window {id} not found", guide=f"Couldn't find window {id}")
-        if self._monitor.focus_window(id):
+        if self.system.focus_window(id):
             return TaskResult(result=f"Focused {win.title}", guide=f"Switched to {win.title}")
         return TaskResult(result=f"Failed to focus {win.title}", guide=f"Couldn't bring {win.title} to front")
 
@@ -188,11 +183,8 @@ class SearchPrograms(InlineTool):
     }
     required = ["query"]
 
-    def __init__(self, monitor: SystemMonitor):
-        self._monitor = monitor
-
     async def run(self, query: str = "", **kwargs) -> TaskResult:
-        matches = self._monitor.search_programs(query)
+        matches = self.system.search_programs(query)
         if not matches:
             return TaskResult(
                 result={"matches": [], "query": query},
@@ -225,18 +217,15 @@ class OpenProgram(InlineTool):
     }
     required = ["name"]
 
-    def __init__(self, monitor: SystemMonitor):
-        self._monitor = monitor
-
     async def run(self, name: str = "", **kwargs) -> TaskResult:
-        program = next((p for p in self._monitor.programs if p.name == name), None)
+        program = next((p for p in self.system.programs if p.name == name), None)
         if not program:
-            program = next((p for p in self._monitor.programs if p.name.lower() == name.lower()), None)
+            program = next((p for p in self.system.programs if p.name.lower() == name.lower()), None)
         if not program:
             return TaskResult(
                 result=f"Program '{name}' not found",
                 guide=f"Couldn't find '{name}'. Try search_programs first.",
             )
-        if self._monitor.launch_program(program.app_id):
+        if self.system.launch_program(program.app_id):
             return TaskResult(result=f"Launched {program.name}", guide=f"Opening {program.name}")
         return TaskResult(result=f"Failed to launch {program.name}", guide=f"Couldn't launch {program.name}")

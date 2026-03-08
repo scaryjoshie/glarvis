@@ -11,7 +11,7 @@ import asyncio
 
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
-from glarvis.tool import SessionTool, TaskResult
+from glarvis.tool import Function, Intercept, Keyword, SessionTool, TaskResult
 
 
 _NUMBER_WORDS = {
@@ -141,12 +141,20 @@ class MultiChoiceSession(SessionTool):
     def is_done(self) -> bool:
         return self._done.is_set()
 
-    async def intercept(self, text: str) -> TaskResult | None:
-        """Catch number words and 'dismiss' before the LLM sees them."""
-        cleaned = text.strip().lower().rstrip(".!?,")
-        if cleaned in ("dismiss", "cancel", "nevermind", "never mind"):
-            return await self.handle_context_call("dismiss")
-        n = _NUMBER_WORDS.get(cleaned)
+    def get_context_intercepts(self) -> list[Intercept]:
+        return [
+            Keyword("dismiss", self._on_dismiss),
+            Keyword("cancel", self._on_dismiss),
+            Keyword("nevermind", self._on_dismiss),
+            Keyword("never mind", self._on_dismiss),
+            Function(self._match_number),
+        ]
+
+    async def _on_dismiss(self) -> TaskResult:
+        return await self.handle_context_call("dismiss")
+
+    async def _match_number(self, text: str) -> TaskResult | None:
+        n = _NUMBER_WORDS.get(text)
         if hasattr(self, "_full_options") and n is not None and 1 <= n <= len(self._full_options):
             return await self.handle_context_call("select_option", number=n)
         return None
