@@ -74,6 +74,7 @@ class BaseTool(ABC):
     notification: NotificationLevel = "silent"
     display: DisplayMode = "none"
     cancel_on_interruption: bool = True
+    shortcuts: list[str] = []  # voice keywords that trigger this tool directly (bypass LLM)
 
     # ── Set by orchestrator at registration ─────────────────────────────
     handle: ToolHandle | None = None

@@ -77,6 +77,7 @@ class Orchestrator:
 
         self._active_contexts: dict[str, TaskState] = {}  # task_id → TaskState
         self._context_tool_map: dict[str, str] = {}  # context tool name → task_id
+        self._shortcuts: dict[str, str] = {}  # keyword → tool name
 
         self.task_manager.on_notification = self._on_notification
         self.task_manager.on_change = self._on_task_change
@@ -137,7 +138,9 @@ class Orchestrator:
         self._tools[tool.name] = tool
         tool.handle = _OrchestratorToolHandle(self, tool.name)
         self._register_handler(tool.name)
-        logger.info(f"[Orchestrator] Registered: {tool.name}")
+        for keyword in tool.shortcuts:
+            self._shortcuts[keyword.lower()] = tool.name
+        logger.info(f"[Orchestrator] Registered: {tool.name}" + (f" (shortcuts: {tool.shortcuts})" if tool.shortcuts else ""))
 
     def _register_handler(self, tool_name: str):
         async def _handler(params: FunctionCallParams):
@@ -339,10 +342,15 @@ class Orchestrator:
     # ── Input interception ────────────────────────────────────────────────────
 
     async def try_intercept(self, text: str) -> TaskResult | None:
-        """Try to intercept user input via active session contexts.
+        """Try to intercept user input via shortcuts or active session contexts.
 
-        Returns a TaskResult if a session claimed the input, None otherwise.
+        Returns a TaskResult if claimed, None otherwise.
         """
+        # Global shortcuts (bypass LLM entirely)
+        result = await self._try_shortcut(text)
+        if result is not None:
+            return result
+
         for task_id, state in list(self._active_contexts.items()):
             if isinstance(state.tool, SessionTool):
                 result = await state.tool.intercept(text)
@@ -360,6 +368,16 @@ class Orchestrator:
                     if state.tool.is_done:
                         self.exit_context(task_id)
                     return result
+        return None
+
+    # ── Global shortcuts ──────────────────────────────────────────────────────
+
+    async def _try_shortcut(self, text: str) -> TaskResult | None:
+        cleaned = text.strip().lower().rstrip(".!?,")
+        tool_name = self._shortcuts.get(cleaned)
+        if tool_name and tool_name in self._tools:
+            logger.info(f"[Orchestrator] Shortcut: {cleaned!r} → {tool_name}")
+            return await self.execute_tool(tool_name, {})
         return None
 
     # ── Helpers ───────────────────────────────────────────────────────────────

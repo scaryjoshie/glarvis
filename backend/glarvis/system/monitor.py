@@ -48,9 +48,9 @@ class WindowInfo:
 class SystemState:
     """Snapshot of current system state."""
     windows: list[WindowInfo] = field(default_factory=list)
-    foreground_id: int | None = None      # WindowInfo.id of focused window
+    foreground_id: int | None = None # WindowInfo.id of focused window
     clipboard: str | None = None
-    time: str = ""                         # human-readable time string
+    time: str = "" # human-readable time string
 
     def summary(self) -> str:
         """Compact text summary for LLM system message injection."""

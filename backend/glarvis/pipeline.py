@@ -28,7 +28,7 @@ from glarvis.task_manager import TaskManager
 from glarvis.tools.core import CloseBoard, DebugContext, EnterSession, ExitSession, ListTools, Mute
 from glarvis.tools.general import (
     FocusWindow, GetTime, ListDirectory, OpenProgram,
-    ReadFile, SearchFiles, SearchPrograms, WriteBoard,
+    ReadFile, SearchFiles, SearchPrograms, SwitchWindow, WriteBoard,
 )
 from glarvis.settings import load_settings
 from glarvis.tools.multi_choice import MultiChoiceSession
@@ -87,7 +87,7 @@ def build_session(
     # Register all tools
     for tool in [
         GetTime(), ListDirectory(), SearchFiles(), WriteBoard(), CloseBoard(),
-        MultiChoiceSession(), Mute(mute_gate),
+        MultiChoiceSession(), Mute(mute_gate), SwitchWindow(),
         FocusWindow(system_monitor), SearchPrograms(system_monitor),
         OpenProgram(system_monitor), ReadFile(),
     ]:

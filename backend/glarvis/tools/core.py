@@ -118,9 +118,11 @@ class DebugContext(InlineTool):
         if messages and messages[0].get("role") == "system":
             sys_content = messages[0].get("content", "")
             has_task_state = "[Task State]" in sys_content
+            has_system_state = "[System State]" in sys_content
             lines.append("## System Message\n")
             lines.append(f"```\n{sys_content[:3000]}\n```\n")
-            lines.append(f"*Task context injected: {'Yes' if has_task_state else 'No (no active/recent tasks)'}*\n")
+            lines.append(f"*Task context injected: {'Yes' if has_task_state else 'No (no active/recent tasks)'}*")
+            lines.append(f"*System state injected: {'Yes' if has_system_state else 'No (monitor may not be running)'}*\n")
             start = 1
         else:
             start = 0
@@ -140,6 +142,18 @@ class DebugContext(InlineTool):
             lines.append(f"## Registered Tools ({len(tools)})\n")
             for name in tools:
                 lines.append(f"- `{name}`")
+
+        # System state (explicit section for easy inspection)
+        sys_monitor = self._orchestrator.system_monitor
+        lines.append("\n## System State\n")
+        if sys_monitor:
+            state = sys_monitor.state
+            summary = state.summary()
+            lines.append(f"*Monitor running: Yes (interval={sys_monitor.interval}s)*")
+            lines.append(f"*Windows: {len(state.windows)}, Foreground ID: {state.foreground_id}*\n")
+            lines.append(f"```\n{summary}\n```")
+        else:
+            lines.append("*No system monitor attached to orchestrator.*")
 
         snapshot = self._orchestrator.task_manager.snapshot()
         lines.append("\n## Task Manager Snapshot\n")

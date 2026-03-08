@@ -125,6 +125,33 @@ class ReadFile(InlineTool):
             return TaskResult(result=f"Error: {e}", guide=f"Couldn't read {path}: {e}")
 
 
+class SwitchWindow(InlineTool):
+    name = "switch_window"
+    description = (
+        "Show a popup with all open windows to switch to. "
+        "Use when the user says 'switch' without specifying a window."
+    )
+    shortcuts = ["switch"]
+
+    async def run(self, **kwargs) -> TaskResult:
+        if not self.system or not self.system.windows:
+            return TaskResult(result="No windows detected", guide="No windows open")
+
+        options = []
+        for w in self.system.windows:
+            label = f"{w.title} ({w.app})" if w.app else w.title
+            if w.id == self.system.foreground_id:
+                label += " *"
+            options.append({
+                "text": label,
+                "action": {"tool": "focus_window", "args": {"id": w.id}},
+            })
+
+        return await self.handle.execute_tool(
+            "show_choices", options=options, prompt="Switch to:",
+        )
+
+
 class FocusWindow(InlineTool):
     name = "focus_window"
     description = (
