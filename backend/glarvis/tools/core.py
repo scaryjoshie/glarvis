@@ -108,36 +108,111 @@ class ListTools(InlineTool):
         )
 
 
-class Restart(InlineTool):
-    name = "restart"
-    description = "Restart Minerva. Launches the start script and exits the current process."
+class Shutdown(InlineTool):
+    name = "shutdown"
+    description = "Shut down Minerva completely."
 
     async def run(self, **kwargs) -> TaskResult:
+        import asyncio
+
+        project_root = Path(__file__).resolve().parents[3]
+        pids_to_kill = _find_project_pids(project_root)
+
+        for pid in pids_to_kill:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+        await asyncio.sleep(0.5)
+        os._exit(0)
+
+
+class Restart(InlineTool):
+    name = "restart"
+    description = "Restart Minerva. Kills all processes and relaunches."
+
+    async def run(self, **kwargs) -> TaskResult:
+        import asyncio
+
         project_root = Path(__file__).resolve().parents[3]
         start_script = project_root / "start.sh"
         if not start_script.exists():
             return TaskResult(result="start.sh not found", guide="Can't restart — start.sh is missing")
 
-        # Launch start.sh detached, then exit
+        # Collect PIDs to kill (Tauri app + node/vite from this project)
+        pids_to_kill = _find_project_pids(project_root)
+
+        # Write a restart script that waits for us to die, then relaunches
         if sys.platform == "win32":
+            restart_bat = project_root / ".restart.bat"
+            restart_bat.write_text(
+                '@echo off\n'
+                'timeout /t 3 /nobreak >nul\n'
+                f'cd /d "{project_root}"\n'
+                f'start "" bash "{start_script}"\n'
+                'del "%~f0"\n',
+                encoding="utf-8",
+            )
             subprocess.Popen(
-                ["bash", str(start_script)],
+                ["cmd", "/c", str(restart_bat)],
                 cwd=str(project_root),
                 creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
-                close_fds=True,
             )
         else:
             subprocess.Popen(
-                ["bash", str(start_script)],
+                ["bash", "-c", f'sleep 3 && bash "{start_script}"'],
                 cwd=str(project_root),
                 start_new_session=True,
                 close_fds=True,
             )
 
-        # Give the TTS a moment to say goodbye, then exit
-        import asyncio
-        await asyncio.sleep(2)
+        # Kill sibling processes (Tauri, node/vite)
+        for pid in pids_to_kill:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+
+        await asyncio.sleep(0.5)
         os._exit(0)
+
+
+def _find_project_pids(project_root: Path) -> list[int]:
+    """Find PIDs of Tauri app and node processes belonging to this project."""
+    pids = []
+    project_str = str(project_root).lower()
+    my_pid = os.getpid()
+
+    if sys.platform != "win32":
+        return pids
+
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where",
+             "name='app.exe' or name='node.exe'",
+             "get", "ProcessId,CommandLine,ExecutablePath", "/format:csv"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
+        )
+        for line in result.stdout.strip().splitlines():
+            parts = line.strip().split(",")
+            if len(parts) < 4:
+                continue
+            # CSV: Node, CommandLine, ExecutablePath, ProcessId
+            combined = ",".join(parts[1:-1]).lower()
+            try:
+                pid = int(parts[-1].strip())
+            except ValueError:
+                continue
+            if pid == my_pid:
+                continue
+            if project_str in combined:
+                pids.append(pid)
+    except Exception:
+        pass
+
+    return pids
 
 
 class DebugContext(InlineTool):

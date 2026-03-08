@@ -236,10 +236,10 @@ This way tools write `self.system.state.windows` (short) but it's backed by the 
 
 ## Implementation Status
 
-The intercept system and system monitor changes are **already implemented** in the current working tree. What remains:
+All items complete.
 
-- [ ] Create `handle.py` with concrete `ToolHandle`
-- [ ] Remove abstract `ToolHandle` from `tool.py`
-- [ ] Remove `_OrchestratorToolHandle` from `orchestrator.py`
-- [ ] Update `orchestrator.register()` to use new `ToolHandle`
-- [ ] Decide on `self.system` convenience property vs `self.handle.system` only
+- [x] Create `handle.py` with concrete `ToolHandle`
+- [x] Remove abstract `ToolHandle` from `tool.py`
+- [x] Remove `_OrchestratorToolHandle` from `orchestrator.py`
+- [x] Update `orchestrator.register()` to use new `ToolHandle`
+- [x] `self.system` convenience property on BaseTool (delegates to `self.handle.system`)
