@@ -6,9 +6,12 @@ to support another platform.
 
 from __future__ import annotations
 
+import base64
 import ctypes
+import io
 import json
 import os
+import struct
 import subprocess
 from pathlib import Path
 
@@ -16,6 +19,7 @@ import win32clipboard
 import win32con
 import win32gui
 import win32process
+import win32ui
 
 # Windows titles that are system noise, not real user windows
 _NOISE_TITLES = {
@@ -28,23 +32,83 @@ _NOISE_TITLES = {
 }
 
 
-def _get_process_name(pid: int) -> str | None:
-    """Get the executable name for a process ID."""
+def _get_process_info(pid: int) -> tuple[str | None, str | None]:
+    """Get (exe_name, exe_path) for a process ID."""
     try:
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
-            return None
+            return None, None
         try:
             buf = ctypes.create_unicode_buffer(260)
             size = ctypes.c_uint(260)
             if ctypes.windll.kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-                return Path(buf.value).stem.lower()
+                p = Path(buf.value)
+                return p.stem.lower(), str(p)
         finally:
             ctypes.windll.kernel32.CloseHandle(handle)
     except Exception:
         pass
-    return None
+    return None, None
+
+
+def get_exe_icon(exe_path: str, size: int = 32) -> str | None:
+    """Extract the icon from an exe as a base64-encoded PNG string."""
+    try:
+        from PIL import Image
+
+        large, small = win32gui.ExtractIconEx(exe_path, 0)
+        if not large:
+            return None
+        hicon = large[0]
+        for h in large[1:] + list(small):
+            win32gui.DestroyIcon(h)
+
+        # Create a 32-bit DIB section for proper alpha
+        bmi = struct.pack(
+            "IiiHHIIIIII",
+            40,       # biSize
+            size,     # biWidth
+            -size,    # biHeight (negative = top-down)
+            1,        # biPlanes
+            32,       # biBitCount
+            0,        # biCompression (BI_RGB)
+            0, 0, 0, 0, 0,
+        )
+        screen_hdc = win32gui.GetDC(0)
+        mem_dc = win32ui.CreateDCFromHandle(screen_hdc).CreateCompatibleDC()
+
+        hbmp = ctypes.windll.gdi32.CreateDIBSection(
+            mem_dc.GetSafeHdc(), bmi, 0,  # DIB_RGB_COLORS
+            ctypes.byref(ctypes.c_void_p()), None, 0,
+        )
+        old = win32gui.SelectObject(mem_dc.GetSafeHdc(), hbmp)
+
+        # Draw icon with alpha blending
+        win32gui.DrawIconEx(
+            mem_dc.GetSafeHdc(), 0, 0, hicon, size, size,
+            0, None, win32con.DI_NORMAL,
+        )
+
+        # Read raw BGRA pixels from DIB
+        buf_size = size * size * 4
+        raw = ctypes.create_string_buffer(buf_size)
+        ctypes.windll.gdi32.GetBitmapBits(hbmp, buf_size, raw)
+
+        # Cleanup GDI
+        win32gui.SelectObject(mem_dc.GetSafeHdc(), old)
+        ctypes.windll.gdi32.DeleteObject(hbmp)
+        mem_dc.DeleteDC()
+        win32gui.ReleaseDC(0, screen_hdc)
+        win32gui.DestroyIcon(hicon)
+
+        img = Image.frombuffer("RGBA", (size, size), raw, "raw", "BGRA", 0, 1)
+
+        out = io.BytesIO()
+        img.save(out, format="PNG")
+        return base64.b64encode(out.getvalue()).decode()
+    except Exception:
+        return None
 
 
 def get_visible_windows() -> list[dict]:
@@ -62,8 +126,8 @@ def get_visible_windows() -> list[dict]:
         if not title or title.lower() in _NOISE_TITLES:
             return
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
-        app = _get_process_name(pid) or ""
-        results.append({"hwnd": hwnd, "title": title, "pid": pid, "app": app})
+        app, exe_path = _get_process_info(pid)
+        results.append({"hwnd": hwnd, "title": title, "pid": pid, "app": app or "", "exe_path": exe_path})
 
     win32gui.EnumWindows(_enum_cb, None)
     return results

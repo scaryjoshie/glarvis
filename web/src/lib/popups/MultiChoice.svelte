@@ -68,8 +68,11 @@
   <div class="options">
     {#each options as option, i}
       <button class="option" on:click={() => select(i)}>
+        {#if option.icon}
+          <img class="icon" src="data:image/png;base64,{option.icon}" alt="" />
+        {/if}
         <span class="number">{i + 1}</span>
-        <span class="label">{option}</span>
+        <span class="label">{typeof option === 'string' ? option : option.text}</span>
       </button>
     {/each}
   </div>
@@ -155,6 +158,13 @@
 
   .option:hover {
     background: rgba(255, 255, 255, 0.06);
+  }
+
+  .icon {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border-radius: 4px;
   }
 
   .number {

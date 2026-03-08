@@ -18,6 +18,7 @@ if sys.platform == "win32":
     from glarvis.system.windows import (
         focus_window as _focus_window,
         get_clipboard_text,
+        get_exe_icon,
         get_foreground_hwnd,
         get_visible_windows,
         launch_app as _launch_app,
@@ -42,6 +43,7 @@ class WindowInfo:
     app: str              # process name (e.g. "notepad", "code", "chrome")
     hwnd: int             # native handle (internal, not exposed to LLM)
     pid: int
+    exe_path: str | None = None  # full path to the executable
 
 
 @dataclass
@@ -105,6 +107,9 @@ class SystemMonitor:
 
         # Installed programs (scanned once on start)
         self.programs: list[ProgramInfo] = []
+
+        # Icon cache: exe_path → base64 PNG (or None for failed extractions)
+        self._icon_cache: dict[str, str | None] = {}
 
     def start(self):
         """Start the background polling loop."""
@@ -176,6 +181,7 @@ class SystemMonitor:
                 app=w.get("app", ""),
                 hwnd=hwnd,
                 pid=w["pid"],
+                exe_path=w.get("exe_path"),
             ))
 
         # Clean up stale entries
@@ -201,6 +207,15 @@ class SystemMonitor:
     def launch_program(self, app_id: str) -> bool:
         """Launch a program by its AppID. Returns True on success."""
         return _launch_app(app_id)
+
+    def get_window_icon(self, window_id: int) -> str | None:
+        """Get base64 PNG icon for a window by its stable ID. Cached by exe path."""
+        win = next((w for w in self.state.windows if w.id == window_id), None)
+        if not win or not win.exe_path:
+            return None
+        if win.exe_path not in self._icon_cache:
+            self._icon_cache[win.exe_path] = get_exe_icon(win.exe_path)
+        return self._icon_cache[win.exe_path]
 
     def search_programs(self, query: str) -> list[ProgramInfo]:
         """Fuzzy search installed programs by name."""

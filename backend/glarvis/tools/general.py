@@ -140,10 +140,14 @@ class SwitchWindow(InlineTool):
             label = f"{w.title} ({w.app})" if w.app else w.title
             if w.id == self.system.state.foreground_id:
                 label += " *"
-            options.append({
+            opt = {
                 "text": label,
                 "action": {"tool": "focus_window", "args": {"id": w.id}},
-            })
+            }
+            icon = self.system.get_window_icon(w.id)
+            if icon:
+                opt["icon"] = icon
+            options.append(opt)
 
         return await self.handle.execute_tool(
             "show_choices", options=options, prompt="Switch to:",

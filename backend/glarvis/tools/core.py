@@ -5,6 +5,10 @@ These tools wire into orchestrator/system internals and are always registered.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from glarvis.tool import InlineTool, TaskResult
@@ -99,6 +103,38 @@ class ListTools(InlineTool):
             board_content=md,
             notify=True,
         )
+
+
+class Restart(InlineTool):
+    name = "restart"
+    description = "Restart Minerva. Launches the start script and exits the current process."
+
+    async def run(self, **kwargs) -> TaskResult:
+        project_root = Path(__file__).resolve().parents[3]
+        start_script = project_root / "start.sh"
+        if not start_script.exists():
+            return TaskResult(result="start.sh not found", guide="Can't restart — start.sh is missing")
+
+        # Launch start.sh detached, then exit
+        if sys.platform == "win32":
+            subprocess.Popen(
+                ["bash", str(start_script)],
+                cwd=str(project_root),
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
+                close_fds=True,
+            )
+        else:
+            subprocess.Popen(
+                ["bash", str(start_script)],
+                cwd=str(project_root),
+                start_new_session=True,
+                close_fds=True,
+            )
+
+        # Give the TTS a moment to say goodbye, then exit
+        import asyncio
+        await asyncio.sleep(2)
+        os._exit(0)
 
 
 class DebugContext(InlineTool):

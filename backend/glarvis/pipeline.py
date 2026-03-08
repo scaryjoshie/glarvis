@@ -25,7 +25,7 @@ from glarvis.prompt import BASE_PROMPT
 from glarvis.response_capture import ResponseCapture
 from glarvis.system import SystemMonitor
 from glarvis.task_manager import TaskManager
-from glarvis.tools.core import CloseBoard, DebugContext, EnterSession, ExitSession, ListTools, Mute
+from glarvis.tools.core import CloseBoard, DebugContext, EnterSession, ExitSession, ListTools, Mute, Restart
 from glarvis.tools.general import (
     FocusWindow, GetTime, ListDirectory, OpenProgram,
     ReadFile, SearchFiles, SearchPrograms, SwitchWindow, WriteBoard,
@@ -91,6 +91,7 @@ def build_session(
         FocusWindow(), SearchPrograms(), OpenProgram(), ReadFile(),
     ]:
         orchestrator.register(tool)
+    orchestrator.register(Restart())
     orchestrator.register(ListTools(orchestrator))
     orchestrator.register(DebugContext(orchestrator))
     orchestrator.register(EnterSession(orchestrator))

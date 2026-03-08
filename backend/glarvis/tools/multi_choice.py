@@ -62,16 +62,27 @@ class MultiChoiceSession(SessionTool):
         self._full_options = []
         for opt in (options or []):
             if isinstance(opt, dict):
-                self._full_options.append({"text": str(opt.get("text", "")), "action": opt.get("action")})
+                self._full_options.append({
+                    "text": str(opt.get("text", "")),
+                    "action": opt.get("action"),
+                    "icon": opt.get("icon"),
+                })
             else:
-                self._full_options.append({"text": str(opt), "action": None})
+                self._full_options.append({"text": str(opt), "action": None, "icon": None})
 
         self._result: TaskResult | None = None
         self._done = asyncio.Event()
 
+        popup_options = []
+        for opt in self._full_options:
+            entry = {"text": opt["text"]}
+            if opt["icon"]:
+                entry["icon"] = opt["icon"]
+            popup_options.append(entry)
+
         await self.handle.open_popup("multi_choice", {
             "prompt": prompt,
-            "options": [opt["text"] for opt in self._full_options],
+            "options": popup_options,
         })
 
         # Block until a choice is made or dismissed
