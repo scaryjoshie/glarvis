@@ -16,6 +16,10 @@
   let ttsVoice = '';
   let sttProvider = '';
   let sttModel = '';
+  let transcriberProvider = '';
+  let transcriberModel = '';
+  let transcriberEditPrompt = 'clean up grammar and formatting';
+  let transcriberShowDiff = true;
   let settingsInitialized = false;
 
   function initFromData(d) {
@@ -25,9 +29,14 @@
     ttsVoice = d.tts?.voice_id || '';
     sttProvider = d.stt?.provider || 'deepgram';
     sttModel = d.stt?.model || '';
+    transcriberProvider = d.transcriber?.provider || 'anthropic';
+    transcriberModel = d.transcriber?.model || 'claude-haiku-4-5-20251001';
+    transcriberEditPrompt = d.transcriber?.edit_prompt || 'clean up grammar and formatting';
+    transcriberShowDiff = d.transcriber?.show_diff !== false;
     llmHasOverride = d.llm?.has_override || false;
     ttsHasOverride = d.tts?.has_override || false;
     sttHasOverride = d.stt?.has_override || false;
+    transcriberHasOverride = d.transcriber?.has_override || false;
     // Init speed from the current TTS provider
     const ttsProv = (d.services?.tts || []).find(p => p.id === (d.tts?.provider || 'cartesia'));
     speedEnabled = ttsProv?.speed != null;
@@ -48,6 +57,10 @@
 
   let activeTab = 'general';
   $: showProviderPanel = ['llm', 'tts', 'stt'].includes(activeTab);
+
+  // Transcriber: derived from LLM providers
+  $: transcriberProviderData = llmProviders.find(p => p.id === transcriberProvider);
+  $: transcriberModels = transcriberProviderData?.models || [];
 
   $: currentProviders = activeTab === 'llm' ? llmProviders
                        : activeTab === 'tts' ? ttsProviders
@@ -71,7 +84,7 @@
                     : activeTab === 'stt' ? sttModel
                     : '';
 
-  $: tabTitle = { general: 'General', llm: 'Language Model', tts: 'Text to Speech', stt: 'Speech to Text' }[activeTab] || '';
+  $: tabTitle = { general: 'General', llm: 'Language Model', tts: 'Text to Speech', stt: 'Speech to Text', transcriber: 'Transcriber' }[activeTab] || '';
   $: detailTitle = currentProvider ? currentProvider.name : tabTitle;
 
   // ── API key state ─────────────────────────────────────────────────────────
@@ -79,7 +92,8 @@
   let llmHasOverride = false;
   let ttsHasOverride = false;
   let sttHasOverride = false;
-  let editingKeyFor = null; // null | 'llm' | 'tts' | 'stt'
+  let transcriberHasOverride = false;
+  let editingKeyFor = null; // null | 'llm' | 'tts' | 'stt' | 'transcriber'
   let keyConfirmed = false;
   let newKeyValue = '';
 
@@ -119,10 +133,11 @@
 
   function applyKey() {
     if (!newKeyValue.trim()) return;
-    pendingKeyValues[activeTab] = newKeyValue.trim();
-    if (activeTab === 'llm') llmHasOverride = true;
-    else if (activeTab === 'tts') ttsHasOverride = true;
-    else if (activeTab === 'stt') sttHasOverride = true;
+    pendingKeyValues[editingKeyFor] = newKeyValue.trim();
+    if (editingKeyFor === 'llm') llmHasOverride = true;
+    else if (editingKeyFor === 'tts') ttsHasOverride = true;
+    else if (editingKeyFor === 'stt') sttHasOverride = true;
+    else if (editingKeyFor === 'transcriber') transcriberHasOverride = true;
     editingKeyFor = null;
     keyConfirmed = false;
     newKeyValue = '';
@@ -313,6 +328,7 @@
       llm: { provider: llmProvider, model: llmModel },
       tts: { provider: ttsProvider, voice_id: ttsVoice },
       stt: { provider: sttProvider, model: sttModel },
+      transcriber: { provider: transcriberProvider, model: transcriberModel, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff },
     };
     // Include api_key only if changed
     if (pendingKeyValues.llm) payload.llm.api_key = pendingKeyValues.llm;
@@ -321,6 +337,8 @@
     else if (pendingKeyClears.tts) payload.tts.api_key = '';
     if (pendingKeyValues.stt) payload.stt.api_key = pendingKeyValues.stt;
     else if (pendingKeyClears.stt) payload.stt.api_key = '';
+    if (pendingKeyValues.transcriber) payload.transcriber.api_key = pendingKeyValues.transcriber;
+    else if (pendingKeyClears.transcriber) payload.transcriber.api_key = '';
 
     saveSettings(payload);
 
@@ -330,6 +348,7 @@
       llm: { ...sd.llm, provider: llmProvider, model: llmModel, has_override: llmHasOverride },
       tts: { ...sd.tts, provider: ttsProvider, voice_id: ttsVoice, has_override: ttsHasOverride },
       stt: { ...sd.stt, provider: sttProvider, model: sttModel, has_override: sttHasOverride },
+      transcriber: { ...sd.transcriber, provider: transcriberProvider, model: transcriberModel, has_override: transcriberHasOverride, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff },
     }));
 
     settingsOpen.set(false);
@@ -364,6 +383,7 @@
     { id: 'llm', label: 'LLM' },
     { id: 'tts', label: 'TTS' },
     { id: 'stt', label: 'STT' },
+    { id: 'transcriber', label: 'Transcriber' },
   ];
 </script>
 
@@ -467,6 +487,103 @@
                 />
                 <span class="vol-val">{Math.round($sfxVolume * 100)}%</span>
               </div>
+            </div>
+
+          <!-- TRANSCRIBER TAB -->
+          {:else if activeTab === 'transcriber'}
+            <div class="section-label">LLM for Transcript Editing</div>
+            <p class="transcriber-hint">Choose which language model to use when editing transcribed text.</p>
+
+            <div class="transcriber-field">
+              <label class="field-label">Provider</label>
+              <select class="field-select" bind:value={transcriberProvider} on:change={() => {
+                const p = llmProviders.find(x => x.id === transcriberProvider);
+                if (p) transcriberModel = p.default_model || (p.models?.[0] || '');
+              }}>
+                {#each llmProviders as p}
+                  <option value={p.id}>{p.name}</option>
+                {/each}
+              </select>
+            </div>
+
+            <div class="transcriber-field">
+              <label class="field-label">Model</label>
+              <select class="field-select" bind:value={transcriberModel}>
+                {#each transcriberModels as m}
+                  <option value={m}>{m}</option>
+                {/each}
+              </select>
+            </div>
+
+            <div class="transcriber-field">
+              <label class="field-label">Edit Prompt</label>
+              <textarea
+                class="field-textarea"
+                rows="2"
+                bind:value={transcriberEditPrompt}
+                placeholder="Instruction for LLM when editing transcripts..."
+              ></textarea>
+            </div>
+
+            <div class="transcriber-field toggle-row">
+              <label class="field-label">Show Diff After Edit</label>
+              <button
+                class="toggle-btn"
+                class:on={transcriberShowDiff}
+                on:click={() => transcriberShowDiff = !transcriberShowDiff}
+              >
+                {transcriberShowDiff ? 'ON' : 'OFF'}
+              </button>
+            </div>
+
+            <!-- API Key override for transcriber -->
+            <div class="key-section">
+              <div class="section-label">API Key Override</div>
+              {#if editingKeyFor === 'transcriber'}
+                {#if !keyConfirmed}
+                  <div class="key-warning">
+                    <p>This will set an API key override for the transcriber. Are you sure?</p>
+                    <div class="edit-actions">
+                      <button class="sm-btn" on:click={confirmEditKey}>Yes, override</button>
+                      <button class="sm-btn muted" on:click={cancelEditKey}>Cancel</button>
+                    </div>
+                  </div>
+                {:else}
+                  <div class="key-paste">
+                    <input
+                      type="password"
+                      class="edit-input mono"
+                      bind:value={newKeyValue}
+                      placeholder="Paste API key"
+                      on:keydown={e => e.key === 'Enter' && applyKey()}
+                      autofocus
+                    />
+                    <div class="edit-actions">
+                      <button class="sm-btn" on:click={applyKey} disabled={!newKeyValue.trim()}>Apply</button>
+                      <button class="sm-btn muted" on:click={cancelEditKey}>Cancel</button>
+                    </div>
+                  </div>
+                {/if}
+              {:else}
+                <div class="key-display">
+                  <div class="key-info">
+                    {#if transcriberHasOverride}
+                      <span class="key-val">{'\u2022'.repeat(12)}</span>
+                      <span class="key-source">override</span>
+                    {:else}
+                      <span class="key-none">Uses LLM provider key from .env</span>
+                    {/if}
+                  </div>
+                  <div class="key-actions">
+                    <button class="sm-btn" on:click={() => { editingKeyFor = 'transcriber'; keyConfirmed = false; newKeyValue = ''; }}>
+                      {transcriberHasOverride ? 'Edit' : 'Add'}
+                    </button>
+                    {#if transcriberHasOverride}
+                      <button class="sm-btn muted" on:click={() => { pendingKeyClears.transcriber = true; transcriberHasOverride = false; editingKeyFor = null; }}>Clear override</button>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             </div>
 
           <!-- LLM / TTS / STT TABS -->
@@ -1184,5 +1301,102 @@
     color: var(--color-muted);
     font-style: italic;
     padding: 4px 2px 0;
+  }
+
+  /* ── Transcriber tab ─────────────────────────── */
+
+  .transcriber-hint {
+    font-size: 12px;
+    color: var(--color-muted);
+    margin: -8px 0 4px;
+  }
+
+  .transcriber-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .field-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--color-muted);
+  }
+
+  .field-select {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-size: 13px;
+    font-family: var(--font-mono);
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    -webkit-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23666' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 32px;
+  }
+
+  .field-select:focus {
+    border-color: var(--color-blue);
+  }
+
+  .field-select option {
+    background: var(--color-surface);
+    color: var(--color-text);
+  }
+
+  .field-textarea {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-surface);
+    color: var(--color-text);
+    font-family: inherit;
+    font-size: 13px;
+    resize: vertical;
+    outline: none;
+    box-sizing: border-box;
+    min-height: 48px;
+  }
+
+  .field-textarea:focus {
+    border-color: var(--color-blue);
+  }
+
+  .field-textarea::placeholder {
+    color: var(--color-muted);
+  }
+
+  .toggle-row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .toggle-btn {
+    padding: 4px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 6px;
+    background: var(--color-surface);
+    color: var(--color-muted);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+
+  .toggle-btn.on {
+    background: rgba(99, 102, 241, 0.15);
+    color: #818cf8;
+    border-color: rgba(99, 102, 241, 0.3);
   }
 </style>

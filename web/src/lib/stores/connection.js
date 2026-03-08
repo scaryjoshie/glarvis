@@ -14,7 +14,7 @@ export const boardStream = writable([]);    // array of {author, content, timest
 export const boardFocused = writable(null);  // currently focused item index
 export const modelDisplay = writable('');    // current model name for status bar
 export const settingsOpen = writable(false); // settings modal visibility
-export const settingsData = writable({ llm: {}, tts: {}, stt: {}, services: {} }); // cached settings
+export const settingsData = writable({ llm: {}, tts: {}, stt: {}, transcriber: {}, services: {} }); // cached settings
 
 // ── Volume stores (persisted in localStorage) ────────────────────────────────
 
@@ -96,7 +96,7 @@ export async function openPopup(popupType, toolName, data) {
     const optionCount = data?.options?.length || 3;
     height = Math.min(optionCount * 49 + 120, 640);
   } else if (popupType === 'transcriber') {
-    // Minimized: small pill at bottom-center
+    // Minimized: small pill at bottom-center (expands to 760x440)
     width = 520;
     height = 56;
     center = false;
@@ -259,6 +259,19 @@ function _connectWs() {
           emitTo('popup_transcribe', 'transcriber-state', { paused: msg.paused });
         } catch {}
         break;
+      case 'transcriber_editing':
+        try {
+          emitTo('popup_transcribe', 'transcriber-editing', { editing: msg.editing });
+        } catch {}
+        break;
+      case 'transcriber_edit_result':
+        try {
+          emitTo('popup_transcribe', 'transcriber-edit-result', {
+            original: msg.original,
+            edited: msg.edited,
+          });
+        } catch {}
+        break;
       case 'model_info':
         modelDisplay.set(msg.model_display);
         break;
@@ -267,6 +280,7 @@ function _connectWs() {
           llm: msg.llm || {},
           tts: msg.tts || {},
           stt: msg.stt || {},
+          transcriber: msg.transcriber || {},
           services: msg.services || {},
         });
         break;
@@ -462,6 +476,7 @@ export async function openSettings() {
           llm: data.llm || {},
           tts: data.tts || {},
           stt: data.stt || {},
+          transcriber: data.transcriber || {},
           services: data.services || {},
         });
       }
@@ -475,9 +490,9 @@ export function requestSettings() {
   }
 }
 
-export function saveSettings({ llm, tts, stt }) {
+export function saveSettings({ llm, tts, stt, transcriber }) {
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'save_settings', llm, tts, stt }));
+    ws.send(JSON.stringify({ type: 'save_settings', llm, tts, stt, transcriber }));
   }
 }
 
@@ -490,6 +505,7 @@ export async function reloadSettings() {
         llm: data.llm || {},
         tts: data.tts || {},
         stt: data.stt || {},
+        transcriber: data.transcriber || {},
         services: data.services || {},
       });
     }

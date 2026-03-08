@@ -48,8 +48,8 @@ class InputInterceptor(FrameProcessor):
             return
 
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
-            # System-injected frames bypass speech monitors and intercepts
-            if frame.user_id in ("system", "popup"):
+            # System-injected and typed text frames bypass speech monitors and intercepts
+            if frame.user_id in ("system", "popup", "text"):
                 await self.push_frame(frame, direction)
                 return
 

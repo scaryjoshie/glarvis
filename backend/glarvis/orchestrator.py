@@ -313,13 +313,16 @@ class Orchestrator:
         )
 
         # Inject as user text so the LLM processes the selection
+        # Skip for hides_speech sessions (e.g. transcriber) — guide would leak into chat
         if result and result.guide and self.pipeline_task:
-            frame = TranscriptionFrame(
-                text=f"[{result.guide}]",
-                user_id="popup",
-                timestamp=str(time.time()),
-            )
-            await self.pipeline_task.queue_frame(frame)
+            skip = isinstance(state.tool, SessionTool) and state.tool.hides_speech
+            if not skip:
+                frame = TranscriptionFrame(
+                    text=f"[{result.guide}]",
+                    user_id="popup",
+                    timestamp=str(time.time()),
+                )
+                await self.pipeline_task.queue_frame(frame)
 
     # ── Pre-turn preparation ─────────────────────────────────────────────────
 

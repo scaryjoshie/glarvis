@@ -12,6 +12,7 @@ Tracks the target window (last focused non-popup window) for send.
 from __future__ import annotations
 
 import asyncio
+import os
 
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
@@ -41,6 +42,8 @@ _COMMANDS: dict[str, str] = {
     "edit this": "edit",
     "clean this up": "edit",
     "fix this": "edit",
+    "submit": "submit",
+    "submit it": "submit",
 }
 
 
@@ -57,9 +60,15 @@ class TranscriberSession(SessionTool):
 
     async def run(self, **kwargs) -> TaskResult:
         self._buffer: list[str] = []
+        self._edited_text: str | None = None
         self._done = asyncio.Event()
         self._popup_open = True
         self._paused = False
+
+        # Load persistent settings for popup
+        from glarvis.settings import load_settings
+        settings = load_settings()
+        ts = settings.transcriber
 
         # Track the target window (where "send" will paste to)
         self._target_hwnd: int | None = None
@@ -69,6 +78,8 @@ class TranscriberSession(SessionTool):
             "mode": "minimized",
             "text": "",
             "paused": False,
+            "edit_prompt": ts.edit_prompt,
+            "show_diff": ts.show_diff,
         })
 
         # Block until session ends
@@ -148,6 +159,8 @@ class TranscriberSession(SessionTool):
                 await self._do_resume()
             elif action == "edit":
                 await self._do_edit_via_llm()
+            elif action == "submit":
+                await self._do_submit()
             return
 
         # Don't buffer when paused
@@ -176,17 +189,6 @@ class TranscriberSession(SessionTool):
                 required=[],
             ),
             FunctionSchema(
-                name="transcriber_edit",
-                description="Ask the LLM to clean up / rewrite the transcribed text. Provide an instruction.",
-                properties={
-                    "instruction": {
-                        "type": "string",
-                        "description": "How to edit the text (e.g. 'fix grammar', 'make formal', 'summarize')",
-                    },
-                },
-                required=[],
-            ),
-            FunctionSchema(
                 name="transcriber_clear",
                 description="Clear the transcribed text buffer.",
                 properties={},
@@ -206,7 +208,7 @@ class TranscriberSession(SessionTool):
         elif tool_name == "transcriber_copy":
             return await self._do_copy()
         elif tool_name == "transcriber_edit":
-            instruction = kwargs.get("instruction", "clean up grammar and formatting")
+            instruction = kwargs.get("instruction") or None
             return await self._do_edit(instruction)
         elif tool_name == "transcriber_clear":
             return await self._do_clear()
@@ -216,12 +218,37 @@ class TranscriberSession(SessionTool):
             return await self._do_resume()
         elif tool_name == "transcriber_stop":
             return await self._do_stop()
+        elif tool_name == "transcriber_submit":
+            return await self._do_submit()
+        elif tool_name == "transcriber_update_text":
+            # Popup manually edited text — save back to buffer
+            new_text = kwargs.get("text", "")
+            if new_text:
+                self._buffer = [new_text]
+                self._edited_text = new_text
+            return TaskResult(result="Text updated.")
+        elif tool_name == "transcriber_set_prompt":
+            from glarvis.settings import load_settings, save_settings
+            prompt = kwargs.get("prompt", "").strip()
+            if prompt:
+                settings = load_settings()
+                settings.transcriber.edit_prompt = prompt
+                save_settings(settings)
+            return TaskResult(result="Prompt saved.")
+        elif tool_name == "transcriber_set_show_diff":
+            from glarvis.settings import load_settings, save_settings
+            show = kwargs.get("show_diff", True)
+            settings = load_settings()
+            settings.transcriber.show_diff = bool(show)
+            save_settings(settings)
+            return TaskResult(result="Show diff setting saved.")
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
 
     # ── Actions ──────────────────────────────────────────────────────────
 
     async def _do_send(self) -> TaskResult:
-        text = " ".join(self._buffer)
+        # Prefer edited text (right pane) over raw buffer
+        text = self._edited_text if self._edited_text else " ".join(self._buffer)
         if not text:
             return TaskResult(result="Nothing to send.", guide="Buffer is empty.")
 
@@ -236,6 +263,7 @@ class TranscriberSession(SessionTool):
         success = paste_text(text)
         if success:
             self._buffer.clear()
+            self._edited_text = None
             if self._popup_open:
                 await self._update_popup("")
             return TaskResult(result="Text pasted.", guide="Sent.")
@@ -252,31 +280,119 @@ class TranscriberSession(SessionTool):
             return TaskResult(result="Copied to clipboard.", guide="Copied.")
         return TaskResult(result="Failed to copy.", guide="Copy failed.")
 
-    async def _do_edit(self, instruction: str) -> TaskResult:
+    async def _do_edit(self, instruction: str | None = None) -> TaskResult:
+        """Edit transcript using the configured transcriber LLM (direct API call)."""
         text = " ".join(self._buffer)
         if not text:
             return TaskResult(result="Nothing to edit.", guide="Buffer is empty.")
 
-        return TaskResult(
-            result=f"Current transcript:\n{text}\n\nInstruction: {instruction}\n\nRewrite the transcript according to the instruction. Post the result to the board showing original and edited versions.",
-            guide="Editing transcript.",
-        )
+        if not instruction:
+            from glarvis.settings import load_settings
+            instruction = load_settings().transcriber.edit_prompt
+
+        self._paused = True
+        await self._broadcast_state()
+        await self._broadcast_editing(True)
+
+        try:
+            edited = await self._call_edit_llm(text, instruction)
+            # Replace buffer with edited text
+            self._buffer = [edited]
+            self._edited_text = edited
+            if self._popup_open:
+                await self._update_popup(edited)
+                await self._broadcast_edit_result(text, edited)
+            await self._broadcast_editing(False)
+            self._paused = False
+            await self._broadcast_state()
+            return TaskResult(result="Transcript edited.", guide="Edited.")
+        except Exception as e:
+            logger.error(f"[Transcriber] Edit failed: {e}")
+            await self._broadcast_editing(False)
+            self._paused = False
+            await self._broadcast_state()
+            return TaskResult(result=f"Edit failed: {e}", guide="Edit failed.")
+
+    async def _call_edit_llm(self, text: str, instruction: str) -> str:
+        """Call the configured LLM directly to edit the transcript."""
+        from glarvis.settings import load_settings
+        from glarvis.services.registry import _load_config
+
+        settings = load_settings()
+        ts = settings.transcriber
+
+        # Resolve provider config
+        config = _load_config()
+        provider_config = config.get("llm", {}).get(ts.provider, {})
+
+        # Resolve API key: override > env var from provider config
+        api_key = ts.api_key
+        if not api_key:
+            env_key = provider_config.get("env_key", "")
+            api_key = os.getenv(env_key, "")
+
+        if not api_key:
+            raise ValueError(f"No API key for transcriber provider '{ts.provider}'")
+
+        base_url = provider_config.get("base_url")
+        service_class = provider_config.get("service", "")
+        prompt = f"Edit the following transcript according to the instruction. Return ONLY the edited text, nothing else.\n\nInstruction: {instruction}\n\nTranscript:\n{text}"
+
+        # Use Anthropic SDK for Anthropic provider, OpenAI SDK for others
+        if "anthropic" in service_class.lower() or ts.provider == "anthropic":
+            import anthropic
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            client = anthropic.AsyncAnthropic(**kwargs)
+            response = await asyncio.wait_for(
+                client.messages.create(
+                    model=ts.model,
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+                timeout=30,
+            )
+            return response.content[0].text.strip()
+        else:
+            # OpenAI-compatible (OpenAI, OpenRouter, etc.)
+            from openai import AsyncOpenAI
+            kwargs = {"api_key": api_key}
+            if base_url:
+                kwargs["base_url"] = base_url
+            client = AsyncOpenAI(**kwargs)
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=ts.model,
+                    messages=[{"role": "user", "content": prompt}],
+                ),
+                timeout=30,
+            )
+            return response.choices[0].message.content.strip()
 
     async def _do_edit_via_llm(self):
-        """Pause capture and nudge the LLM to call transcriber_edit."""
+        """Voice command handler for 'edit' — runs edit with settings prompt."""
         text = " ".join(self._buffer)
         if not text:
             return
-        self._paused = True
-        await self._broadcast_state()
-        # Inject a message that triggers the LLM — it will see the context tools
-        # and the transcript in get_context_info(), then call transcriber_edit
-        await self.handle.inject_llm_message(
-            f"[User wants to edit the transcript. Call transcriber_edit to clean it up.]"
-        )
+        from glarvis.settings import load_settings
+        instruction = load_settings().transcriber.edit_prompt
+        return await self._do_edit(instruction)
+
+    async def _do_submit(self) -> TaskResult:
+        """Send text + press Enter in the target window."""
+        result = await self._do_send()
+        if result.guide == "Sent.":
+            import time
+            from glarvis.system.windows import send_key
+            time.sleep(0.1)
+            send_key(0x0D)  # VK_RETURN
+            return TaskResult(result="Text submitted.", guide="Submitted.")
+        return result
 
     async def _do_clear(self) -> TaskResult:
         self._buffer.clear()
+        self._edited_text = None
         if self._popup_open:
             await self._update_popup("")
         return TaskResult(result="Cleared.", guide="Cleared.")
@@ -315,6 +431,21 @@ class TranscriberSession(SessionTool):
             "paused": self._paused,
         })
 
+    async def _broadcast_editing(self, editing: bool):
+        """Notify popup that an LLM edit is in progress."""
+        await self.handle.broadcast({
+            "type": "transcriber_editing",
+            "editing": editing,
+        })
+
+    async def _broadcast_edit_result(self, original: str, edited: str):
+        """Send both original and edited text so popup can show a diff."""
+        await self.handle.broadcast({
+            "type": "transcriber_edit_result",
+            "original": original,
+            "edited": edited,
+        })
+
     # ── SessionTool protocol ─────────────────────────────────────────────
 
     @property
@@ -327,7 +458,7 @@ class TranscriberSession(SessionTool):
         paused = " (PAUSED)" if getattr(self, "_paused", False) else ""
         return (
             f"Transcriber is active{paused} ({word_count} words captured). "
-            f"Voice commands handled directly. LLM can call transcriber_edit to rewrite."
+            f"Voice commands handled directly. Edit uses a separate LLM."
         )
 
     async def on_input(self, **kwargs) -> TaskResult:

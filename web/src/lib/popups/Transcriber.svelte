@@ -2,86 +2,209 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow, LogicalSize, LogicalPosition } from '@tauri-apps/api/window';
   import { onMount, onDestroy } from 'svelte';
+  import { diffWords } from 'diff';
 
   export let text = '';
   export let mode = 'minimized';
   export let paused = false;
   export let toolName = '';
+  export let edit_prompt = 'clean up grammar and formatting';
+  export let show_diff = true;
 
   let currentText = text || '';
   let expanded = mode === 'maximized';
   let recording = !paused;
   let scrollContainer;
-  let unlistenUpdate;
-  let unlistenState;
+  let rightScrollContainer;
+  let unlistens = [];
+
+  // Edit/diff state
+  let editedText = '';
+  let editPrompt = edit_prompt || 'clean up grammar and formatting';
+  let isEditing = false;  // LLM edit in progress
+  let showDiff = show_diff;
+  let originalForDiff = '';
+
+  // Track how expanded was opened
+  let openedVia = null; // 'direct' | 'edit'
+
+  // Contenteditable refs
+  let leftEditable;
+  let rightEditable;
 
   $: words = currentText ? currentText.split(/\s+/).filter(Boolean) : [];
-  $: visibleWords = words.slice(-12);
+  $: visibleWords = words.slice(-8);
+  $: diffResult = showDiff && originalForDiff && editedText ? diffWords(originalForDiff, editedText) : [];
+  $: leftDiff = showDiff ? diffResult.filter(d => !d.added) : [];
+  $: rightDiff = showDiff ? diffResult.filter(d => !d.removed) : [];
 
   onMount(async () => {
-    unlistenUpdate = await listen('transcriber-update', (event) => {
+    unlistens.push(await listen('transcriber-update', (event) => {
       currentText = event.payload.text || '';
-      if (expanded && scrollContainer) {
+      if (expanded && scrollContainer && !isEditing) {
         requestAnimationFrame(() => {
           scrollContainer.scrollTop = scrollContainer.scrollHeight;
         });
       }
-    });
-    unlistenState = await listen('transcriber-state', (event) => {
+    }));
+    unlistens.push(await listen('transcriber-state', (event) => {
       recording = !event.payload.paused;
-    });
+    }));
+    unlistens.push(await listen('transcriber-editing', (event) => {
+      isEditing = event.payload.editing;
+      // Auto-expand on edit if minimized
+      if (event.payload.editing && !expanded) {
+        openedVia = 'edit';
+        doExpand();
+      }
+    }));
+    unlistens.push(await listen('transcriber-edit-result', (event) => {
+      originalForDiff = event.payload.original;
+      editedText = event.payload.edited;
+      currentText = event.payload.original;
+      showDiff = true;
+      isEditing = false;
+    }));
   });
 
   onDestroy(() => {
-    if (unlistenUpdate) unlistenUpdate();
-    if (unlistenState) unlistenState();
+    unlistens.forEach(u => u());
   });
 
   async function action(name, data = {}) {
     await emit('popup-action', { tool_name: toolName, action: name, data });
   }
 
-  function doSend() { action('transcriber_send'); }
+  function doSend() {
+    action('transcriber_send');
+    afterSendOrSubmit();
+  }
   function doCopy() { action('transcriber_copy'); }
-  function doClear() { action('transcriber_clear'); }
+  function doClear() {
+    action('transcriber_clear');
+    editedText = '';
+    showDiff = false;
+    originalForDiff = '';
+  }
   function doStop() {
     action('transcriber_stop');
     try { getCurrentWindow().close(); } catch {}
   }
+  function doSubmit() {
+    action('transcriber_submit');
+    afterSendOrSubmit();
+  }
+
+  function afterSendOrSubmit() {
+    editedText = '';
+    showDiff = false;
+    originalForDiff = '';
+    if (openedVia === 'edit') {
+      // Collapse back to pill
+      doCollapse();
+    }
+    // If openedVia === 'direct', stay expanded — text is cleared by backend
+  }
+
+  function doEdit() {
+    const instruction = editPrompt.trim() || 'clean up grammar and formatting';
+    action('transcriber_edit', { instruction });
+    // Don't clear editPrompt — keep it for reuse
+  }
+
+  function doUpdateText(newText) {
+    action('transcriber_update_text', { text: newText });
+  }
+
   function toggleRecording() {
     if (recording) {
       action('transcriber_pause');
-      recording = false;  // optimistic update
+      recording = false;
     } else {
       action('transcriber_resume');
       recording = true;
     }
   }
 
-  async function toggleExpand() {
-    expanded = !expanded;
+  function toggleDiff() {
+    showDiff = !showDiff;
+    action('transcriber_set_show_diff', { show_diff: showDiff });
+  }
+
+  // Contenteditable input handlers
+  function onLeftInput(e) {
+    const newText = e.target.innerText;
+    currentText = newText;
+    doUpdateText(newText);
+    // Auto-pause on edit
+    if (recording) {
+      action('transcriber_pause');
+      recording = false;
+    }
+  }
+
+  function onRightInput(e) {
+    editedText = e.target.innerText;
+    // Auto-pause on edit
+    if (recording) {
+      action('transcriber_pause');
+      recording = false;
+    }
+  }
+
+  // Save prompt on blur
+  function onPromptBlur() {
+    const trimmed = editPrompt.trim();
+    if (trimmed) {
+      action('transcriber_set_prompt', { prompt: trimmed });
+    }
+  }
+
+  async function doExpand() {
+    expanded = true;
     try {
       const win = getCurrentWindow();
-      if (expanded) {
-        const w = 520, h = 360;
-        await win.setSize(new LogicalSize(w, h));
-        const x = Math.round(screen.width / 2 - w / 2);
-        const y = Math.round(screen.height / 2 - h / 2);
-        await win.setPosition(new LogicalPosition(x, y));
-      } else {
-        const w = 520, h = 56;
-        await win.setSize(new LogicalSize(w, h));
-        const x = Math.round(screen.width / 2 - w / 2);
-        const y = screen.height - 120;
-        await win.setPosition(new LogicalPosition(x, y));
-      }
+      const w = 760, h = 440;
+      await win.setSize(new LogicalSize(w, h));
+      const x = Math.round(screen.width / 2 - w / 2);
+      const y = Math.round(screen.height / 2 - h / 2);
+      await win.setPosition(new LogicalPosition(x, y));
     } catch (e) {
       console.warn('[Transcriber] Resize failed:', e);
     }
   }
 
+  async function doCollapse() {
+    expanded = false;
+    openedVia = null;
+    showDiff = false;
+    try {
+      const win = getCurrentWindow();
+      const w = 520, h = 56;
+      await win.setSize(new LogicalSize(w, h));
+      const x = Math.round(screen.width / 2 - w / 2);
+      const y = screen.height - 120;
+      await win.setPosition(new LogicalPosition(x, y));
+    } catch (e) {
+      console.warn('[Transcriber] Resize failed:', e);
+    }
+  }
+
+  async function toggleExpand() {
+    if (expanded) {
+      doCollapse();
+    } else {
+      openedVia = 'direct';
+      doExpand();
+    }
+  }
+
   function onKeydown(e) {
     if (e.key === 'Escape') doStop();
+    if (e.key === 'Enter' && !e.shiftKey && editPrompt.trim() && document.activeElement?.classList?.contains('prompt-input')) {
+      e.preventDefault();
+      doEdit();
+    }
   }
 </script>
 
@@ -106,30 +229,130 @@
         {/if}
       </button>
       <span class="title" data-tauri-drag-region>
-        {recording ? 'Transcribing' : 'Paused'}
+        {#if isEditing}
+          Editing...
+        {:else}
+          {recording ? 'Transcribing' : 'Paused'}
+        {/if}
       </span>
       <div class="header-actions">
+        {#if originalForDiff && editedText}
+          <button
+            class="icon-btn"
+            class:active={showDiff}
+            on:click={toggleDiff}
+            title={showDiff ? 'Hide diff' : 'Show diff'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              {#if showDiff}
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+              {:else}
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                <line x1="1" y1="1" x2="23" y2="23"/>
+              {/if}
+            </svg>
+          </button>
+        {/if}
         <button class="icon-btn" on:click={toggleExpand} title="Minimize">&#x2013;</button>
         <button class="icon-btn close" on:click={doStop} title="Close">&times;</button>
       </div>
     </div>
-    <div class="text-body" bind:this={scrollContainer}>
-      {#if currentText}
-        <p class="transcript-text">{currentText}</p>
-      {:else}
-        <p class="placeholder-text">
-          {recording ? 'Speak to start transcribing...' : 'Paused — click record to resume'}
-        </p>
-      {/if}
+
+    <!-- Split panes -->
+    <div class="split-panes">
+      <div class="pane left">
+        <div class="pane-label">Original</div>
+        <div class="pane-body" bind:this={scrollContainer}>
+          {#if showDiff && diffResult.length}
+            <div class="diff-view">
+              {#each leftDiff as part}
+                <span class:diff-removed={part.removed}>{part.value}</span>
+              {/each}
+            </div>
+          {:else if currentText}
+            <div
+              class="editable-pane"
+              contenteditable="true"
+              bind:this={leftEditable}
+              on:input={onLeftInput}
+              role="textbox"
+              tabindex="0"
+            >{currentText}</div>
+          {:else}
+            <p class="placeholder-text">
+              {recording ? 'Speak to start...' : 'Paused'}
+            </p>
+          {/if}
+        </div>
+      </div>
+
+      <div class="pane-divider">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="9 18 15 12 9 6"/>
+        </svg>
+      </div>
+
+      <div class="pane right">
+        <div class="pane-label">Edited</div>
+        <div class="pane-body" bind:this={rightScrollContainer}>
+          {#if isEditing}
+            <div class="spinner-container">
+              <div class="spinner"></div>
+              <span class="spinner-text">Editing...</span>
+            </div>
+          {:else if showDiff && diffResult.length}
+            <div class="diff-view">
+              {#each rightDiff as part}
+                <span class:diff-added={part.added}>{part.value}</span>
+              {/each}
+            </div>
+          {:else if editedText}
+            <div
+              class="editable-pane"
+              contenteditable="true"
+              bind:this={rightEditable}
+              on:input={onRightInput}
+              role="textbox"
+              tabindex="0"
+            >{editedText}</div>
+          {:else}
+            <p class="placeholder-text">Use Edit to rewrite</p>
+          {/if}
+        </div>
+      </div>
     </div>
+
+    <!-- Prompt bar -->
+    <div class="prompt-bar">
+      <textarea
+        class="prompt-input"
+        rows="1"
+        bind:value={editPrompt}
+        on:blur={onPromptBlur}
+        placeholder="Edit instruction (e.g. 'make it formal')..."
+        disabled={isEditing || !currentText}
+      ></textarea>
+      <button
+        class="prompt-btn"
+        on:click={doEdit}
+        disabled={isEditing || !currentText}
+      >
+        {isEditing ? '...' : 'Edit'}
+      </button>
+    </div>
+
+    <!-- Action bar -->
     <div class="action-bar">
-      <button class="action-btn primary" on:click={doSend} disabled={!currentText}>
+      <button class="action-btn primary" on:click={doSubmit} disabled={!currentText && !editedText}>
+        Submit
+      </button>
+      <button class="action-btn primary" on:click={doSend} disabled={!currentText && !editedText}>
         Send
       </button>
-      <button class="action-btn" on:click={doCopy} disabled={!currentText}>
+      <button class="action-btn" on:click={doCopy} disabled={!currentText && !editedText}>
         Copy
       </button>
-      <button class="action-btn" on:click={doClear} disabled={!currentText}>
+      <button class="action-btn" on:click={doClear} disabled={!currentText && !editedText}>
         Clear
       </button>
       <div class="spacer"></div>
@@ -183,6 +406,13 @@
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
           <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>
+        </svg>
+      </button>
+      <!-- Clear -->
+      <button class="mini-btn" on:click={doClear} disabled={!currentText} title="Clear">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/>
         </svg>
       </button>
       <!-- Expand -->
@@ -307,8 +537,9 @@
     white-space: nowrap;
     flex: 1;
     min-width: 0;
-    mask-image: linear-gradient(to right, transparent, black 15%, black);
-    -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black);
+    padding-right: 8px;
+    mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+    -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
     cursor: grab;
   }
 
@@ -425,34 +656,197 @@
     color: #ef4444;
   }
 
-  .text-body {
+  .icon-btn.active {
+    color: #818cf8;
+  }
+
+  /* ── Split panes ────────────────────────────────────────────────── */
+
+  .split-panes {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  .pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .pane-label {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #52525b;
+    padding: 6px 12px 2px;
+    flex-shrink: 0;
+  }
+
+  .pane-body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
-    padding: 16px;
+    padding: 4px 12px 12px;
   }
 
-  .transcript-text {
-    margin: 0;
-    font-size: 14px;
-    line-height: 1.7;
-    color: #d4d4d8;
-    white-space: pre-wrap;
-    word-break: break-word;
+  .pane-divider {
+    width: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #3f3f46;
   }
 
   .placeholder-text {
     margin: 0;
-    font-size: 14px;
+    font-size: 13px;
     color: #52525b;
     font-style: italic;
   }
 
+  .editable-pane {
+    font-size: 13px;
+    line-height: 1.7;
+    color: #d4d4d8;
+    white-space: pre-wrap;
+    word-break: break-word;
+    outline: none;
+    min-height: 100%;
+    border-radius: 6px;
+    padding: 4px;
+    transition: background 0.15s;
+  }
+
+  .editable-pane:focus {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  /* ── Diff view ──────────────────────────────────────────────────── */
+
+  .diff-view {
+    font-size: 13px;
+    line-height: 1.7;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  .diff-removed {
+    background: rgba(239, 68, 68, 0.2);
+    color: #fca5a5;
+    text-decoration: line-through;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  .diff-added {
+    background: rgba(34, 197, 94, 0.2);
+    color: #86efac;
+    border-radius: 2px;
+    padding: 0 1px;
+  }
+
+  /* ── Spinner ────────────────────────────────────────────────────── */
+
+  .spinner-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 10px;
+  }
+
+  .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255, 255, 255, 0.1);
+    border-top-color: #818cf8;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  .spinner-text {
+    font-size: 12px;
+    color: #71717a;
+  }
+
+  /* ── Prompt bar ─────────────────────────────────────────────────── */
+
+  .prompt-bar {
+    display: flex;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    flex-shrink: 0;
+  }
+
+  .prompt-input {
+    flex: 1;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 6px;
+    color: #d4d4d8;
+    font-size: 12px;
+    padding: 6px 10px;
+    outline: none;
+    font-family: inherit;
+    resize: none;
+    field-sizing: content;
+    min-height: 28px;
+    max-height: 80px;
+  }
+
+  .prompt-input:focus {
+    border-color: rgba(99, 102, 241, 0.4);
+  }
+
+  .prompt-input::placeholder {
+    color: #52525b;
+  }
+
+  .prompt-input:disabled {
+    opacity: 0.4;
+  }
+
+  .prompt-btn {
+    padding: 6px 14px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(99, 102, 241, 0.2);
+    color: #818cf8;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s;
+    flex-shrink: 0;
+    align-self: flex-end;
+  }
+
+  .prompt-btn:hover:not(:disabled) {
+    background: rgba(99, 102, 241, 0.3);
+  }
+
+  .prompt-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+
+  /* ── Action bar ─────────────────────────────────────────────────── */
+
   .action-bar {
     display: flex;
     gap: 8px;
-    padding: 12px 16px;
-    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    padding: 10px 12px;
     flex-shrink: 0;
   }
 
@@ -461,7 +855,7 @@
   }
 
   .action-btn {
-    padding: 7px 16px;
+    padding: 7px 14px;
     border: none;
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.06);

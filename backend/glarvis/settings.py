@@ -38,10 +38,20 @@ class STTSettings:
 
 
 @dataclass
+class TranscriberSettings:
+    provider: str = "anthropic"
+    model: str = "claude-haiku-4-5-20251001"
+    api_key: str = ""  # if empty, falls back to env var
+    edit_prompt: str = "clean up grammar and formatting"
+    show_diff: bool = True
+
+
+@dataclass
 class Settings:
     llm: LLMSettings = field(default_factory=LLMSettings)
     tts: TTSSettings = field(default_factory=TTSSettings)
     stt: STTSettings = field(default_factory=STTSettings)
+    transcriber: TranscriberSettings = field(default_factory=TranscriberSettings)
 
 
 def load_settings() -> Settings:
@@ -51,10 +61,12 @@ def load_settings() -> Settings:
             llm_data = data.get("llm", {})
             tts_data = data.get("tts", {})
             stt_data = data.get("stt", {})
+            transcriber_data = data.get("transcriber", {})
             return Settings(
                 llm=LLMSettings(**{k: v for k, v in llm_data.items() if k in LLMSettings.__dataclass_fields__}),
                 tts=TTSSettings(**{k: v for k, v in tts_data.items() if k in TTSSettings.__dataclass_fields__}),
                 stt=STTSettings(**{k: v for k, v in stt_data.items() if k in STTSettings.__dataclass_fields__}),
+                transcriber=TranscriberSettings(**{k: v for k, v in transcriber_data.items() if k in TranscriberSettings.__dataclass_fields__}),
             )
         except Exception:
             pass

@@ -20,7 +20,11 @@ class TranscriptCapture(FrameProcessor):
         if isinstance(frame, TranscriptionFrame):
             text = frame.text.strip()
             if text:
-                logger.info(f'[STT] User said: "{text}"')
-                await self._orchestrator.broadcast_transcript("user", text)
+                # Check if any active session hides speech (e.g. transcriber)
+                monitors = self._orchestrator.get_speech_monitors()
+                hidden = any(hides for _, hides in monitors)
+                if not hidden:
+                    logger.info(f'[STT] User said: "{text}"')
+                    await self._orchestrator.broadcast_transcript("user", text)
 
         await self.push_frame(frame, direction)

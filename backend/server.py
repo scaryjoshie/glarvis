@@ -28,7 +28,7 @@ from glarvis.services import (
     edit_service_voice,
     set_provider_speed,
 )
-from glarvis.settings import LLMSettings, TTSSettings, STTSettings, Settings, load_settings, save_settings
+from glarvis.settings import LLMSettings, TTSSettings, STTSettings, TranscriberSettings, Settings, load_settings, save_settings
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
@@ -87,6 +87,13 @@ def _settings_payload(settings: Settings) -> dict:
             "provider": settings.stt.provider,
             "model": settings.stt.model,
             "has_override": bool(settings.stt.api_key),
+        },
+        "transcriber": {
+            "provider": settings.transcriber.provider,
+            "model": settings.transcriber.model,
+            "has_override": bool(settings.transcriber.api_key),
+            "edit_prompt": settings.transcriber.edit_prompt,
+            "show_diff": settings.transcriber.show_diff,
         },
         "services": status,
     }
@@ -174,10 +181,12 @@ async def _handle_ws_message(msg: dict):
         llm_data = msg.get("llm", {})
         tts_data = msg.get("tts", {})
         stt_data = msg.get("stt", {})
+        transcriber_data = msg.get("transcriber", {})
         # api_key: null/absent = keep existing, "" = clear, "sk-..." = set new
         llm_key = llm_data.get("api_key")
         tts_key = tts_data.get("api_key")
         stt_key = stt_data.get("api_key")
+        transcriber_key = transcriber_data.get("api_key")
         settings = Settings(
             llm=LLMSettings(
                 provider=llm_data.get("provider", "anthropic"),
@@ -194,6 +203,13 @@ async def _handle_ws_message(msg: dict):
                 model=stt_data.get("model", ""),
                 api_key=existing.stt.api_key if stt_key is None else stt_key,
             ),
+            transcriber=TranscriberSettings(
+                provider=transcriber_data.get("provider", existing.transcriber.provider),
+                model=transcriber_data.get("model", existing.transcriber.model),
+                api_key=existing.transcriber.api_key if transcriber_key is None else transcriber_key,
+                edit_prompt=transcriber_data.get("edit_prompt", existing.transcriber.edit_prompt),
+                show_diff=transcriber_data.get("show_diff", existing.transcriber.show_diff),
+            ),
         )
         save_settings(settings)
         logger.info(f"[Server] Settings saved: LLM={settings.llm.provider}/{settings.llm.model} TTS={settings.tts.provider} STT={settings.stt.provider}")
@@ -204,7 +220,7 @@ async def _inject_user_text(text: str):
     if not session or not session.task:
         return
     logger.info(f'[Server] Injecting user text: "{text}"')
-    frame = TranscriptionFrame(text=text, user_id="user", timestamp=str(time.time()))
+    frame = TranscriptionFrame(text=text, user_id="text", timestamp=str(time.time()))
     await session.task.queue_frame(frame)
 
 
