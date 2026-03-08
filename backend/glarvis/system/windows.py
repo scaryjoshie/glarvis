@@ -31,6 +31,11 @@ _NOISE_TITLES = {
     "popuphost",
 }
 
+# Process names that produce ghost windows (visible but not focusable)
+_NOISE_APPS = {
+    "systemsettings",
+}
+
 
 def _get_process_info(pid: int) -> tuple[str | None, str | None]:
     """Get (exe_name, exe_path) for a process ID."""
@@ -52,50 +57,34 @@ def _get_process_info(pid: int) -> tuple[str | None, str | None]:
     return None, None
 
 
-def get_exe_icon(exe_path: str, size: int = 32) -> str | None:
-    """Extract the icon from an exe as a base64-encoded PNG string."""
+def _hicon_to_png(hicon: int, size: int = 32) -> str | None:
+    """Convert an HICON to a base64-encoded PNG string. Destroys the icon."""
     try:
         from PIL import Image
 
-        large, small = win32gui.ExtractIconEx(exe_path, 0)
-        if not large:
-            return None
-        hicon = large[0]
-        for h in large[1:] + list(small):
-            win32gui.DestroyIcon(h)
-
-        # Create a 32-bit DIB section for proper alpha
         bmi = struct.pack(
             "IiiHHIIIIII",
-            40,       # biSize
-            size,     # biWidth
-            -size,    # biHeight (negative = top-down)
-            1,        # biPlanes
-            32,       # biBitCount
-            0,        # biCompression (BI_RGB)
+            40, size, -size, 1, 32, 0,  # top-down 32-bit DIB
             0, 0, 0, 0, 0,
         )
         screen_hdc = win32gui.GetDC(0)
         mem_dc = win32ui.CreateDCFromHandle(screen_hdc).CreateCompatibleDC()
 
         hbmp = ctypes.windll.gdi32.CreateDIBSection(
-            mem_dc.GetSafeHdc(), bmi, 0,  # DIB_RGB_COLORS
+            mem_dc.GetSafeHdc(), bmi, 0,
             ctypes.byref(ctypes.c_void_p()), None, 0,
         )
         old = win32gui.SelectObject(mem_dc.GetSafeHdc(), hbmp)
 
-        # Draw icon with alpha blending
         win32gui.DrawIconEx(
             mem_dc.GetSafeHdc(), 0, 0, hicon, size, size,
             0, None, win32con.DI_NORMAL,
         )
 
-        # Read raw BGRA pixels from DIB
         buf_size = size * size * 4
         raw = ctypes.create_string_buffer(buf_size)
         ctypes.windll.gdi32.GetBitmapBits(hbmp, buf_size, raw)
 
-        # Cleanup GDI
         win32gui.SelectObject(mem_dc.GetSafeHdc(), old)
         ctypes.windll.gdi32.DeleteObject(hbmp)
         mem_dc.DeleteDC()
@@ -103,10 +92,56 @@ def get_exe_icon(exe_path: str, size: int = 32) -> str | None:
         win32gui.DestroyIcon(hicon)
 
         img = Image.frombuffer("RGBA", (size, size), raw, "raw", "BGRA", 0, 1)
-
         out = io.BytesIO()
         img.save(out, format="PNG")
         return base64.b64encode(out.getvalue()).decode()
+    except Exception:
+        try:
+            win32gui.DestroyIcon(hicon)
+        except Exception:
+            pass
+        return None
+
+
+def get_hwnd_icon(hwnd: int, size: int = 32) -> str | None:
+    """Get the icon a window is actually displaying, as base64 PNG.
+
+    Uses WM_GETICON (works for UWP/ApplicationFrameHost), falls back
+    to the window class icon.
+    """
+    WM_GETICON = 0x007F
+    ICON_BIG = 1
+    ICON_SMALL2 = 2
+    GCL_HICON = -14
+
+    try:
+        hicon = win32gui.SendMessage(hwnd, WM_GETICON, ICON_BIG, 0)
+        if not hicon:
+            hicon = win32gui.SendMessage(hwnd, WM_GETICON, ICON_SMALL2, 0)
+        if not hicon:
+            hicon = ctypes.windll.user32.GetClassLongPtrW(hwnd, GCL_HICON)
+        if not hicon:
+            return None
+
+        # CopyIcon so we own it and can safely DestroyIcon
+        hicon_copy = ctypes.windll.user32.CopyIcon(hicon)
+        if not hicon_copy:
+            return None
+        return _hicon_to_png(hicon_copy, size)
+    except Exception:
+        return None
+
+
+def get_exe_icon(exe_path: str, size: int = 32) -> str | None:
+    """Extract the icon from an exe as a base64-encoded PNG string."""
+    try:
+        large, small = win32gui.ExtractIconEx(exe_path, 0)
+        if not large:
+            return None
+        hicon = large[0]
+        for h in large[1:] + list(small):
+            win32gui.DestroyIcon(h)
+        return _hicon_to_png(hicon, size)
     except Exception:
         return None
 
@@ -127,6 +162,8 @@ def get_visible_windows() -> list[dict]:
             return
         _, pid = win32process.GetWindowThreadProcessId(hwnd)
         app, exe_path = _get_process_info(pid)
+        if app and app in _NOISE_APPS:
+            return
         results.append({"hwnd": hwnd, "title": title, "pid": pid, "app": app or "", "exe_path": exe_path})
 
     win32gui.EnumWindows(_enum_cb, None)

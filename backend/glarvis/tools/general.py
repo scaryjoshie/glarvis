@@ -136,21 +136,22 @@ class SwitchWindow(InlineTool):
             return TaskResult(result="No windows detected", guide="No windows open")
 
         options = []
-        for w in self.system.state.windows:
+        icons = {}
+        for i, w in enumerate(self.system.state.windows):
             label = f"{w.title} ({w.app})" if w.app else w.title
             if w.id == self.system.state.foreground_id:
                 label += " *"
-            opt = {
+            options.append({
                 "text": label,
                 "action": {"tool": "focus_window", "args": {"id": w.id}},
-            }
+            })
             icon = self.system.get_window_icon(w.id)
             if icon:
-                opt["icon"] = icon
-            options.append(opt)
+                icons[i] = icon
 
         return await self.handle.execute_tool(
             "show_choices", options=options, prompt="Switch to:",
+            _icons=icons,
         )
 
 

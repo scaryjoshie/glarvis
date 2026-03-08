@@ -58,27 +58,23 @@ class MultiChoiceSession(SessionTool):
     notification = "silent"  # LLM handles the response, not a raw TTS notification
 
     async def run(self, options=None, prompt="", **kwargs) -> TaskResult:
-        # Standardize options internally, but pass simple strings to popup
+        # _icons is a side channel (index → base64 PNG), never part of the LLM schema
+        icons: dict[int, str] = kwargs.pop("_icons", {})
+
         self._full_options = []
-        for opt in (options or []):
+        popup_options = []
+        for i, opt in enumerate(options or []):
             if isinstance(opt, dict):
-                self._full_options.append({
-                    "text": str(opt.get("text", "")),
-                    "action": opt.get("action"),
-                    "icon": opt.get("icon"),
-                })
+                self._full_options.append({"text": str(opt.get("text", "")), "action": opt.get("action")})
             else:
-                self._full_options.append({"text": str(opt), "action": None, "icon": None})
+                self._full_options.append({"text": str(opt), "action": None})
+            entry = {"text": self._full_options[-1]["text"]}
+            if i in icons:
+                entry["icon"] = icons[i]
+            popup_options.append(entry)
 
         self._result: TaskResult | None = None
         self._done = asyncio.Event()
-
-        popup_options = []
-        for opt in self._full_options:
-            entry = {"text": opt["text"]}
-            if opt["icon"]:
-                entry["icon"] = opt["icon"]
-            popup_options.append(entry)
 
         await self.handle.open_popup("multi_choice", {
             "prompt": prompt,

@@ -20,6 +20,7 @@ if sys.platform == "win32":
         get_clipboard_text,
         get_exe_icon,
         get_foreground_hwnd,
+        get_hwnd_icon,
         get_visible_windows,
         launch_app as _launch_app,
         scan_start_apps,
@@ -211,11 +212,16 @@ class SystemMonitor:
     def get_window_icon(self, window_id: int) -> str | None:
         """Get base64 PNG icon for a window by its stable ID. Cached by exe path."""
         win = next((w for w in self.state.windows if w.id == window_id), None)
-        if not win or not win.exe_path:
+        if not win:
             return None
-        if win.exe_path not in self._icon_cache:
-            self._icon_cache[win.exe_path] = get_exe_icon(win.exe_path)
-        return self._icon_cache[win.exe_path]
+        cache_key = win.exe_path or str(win.hwnd)
+        if cache_key not in self._icon_cache:
+            # Prefer the window's own icon (handles UWP/ApplicationFrameHost)
+            icon = get_hwnd_icon(win.hwnd)
+            if not icon and win.exe_path:
+                icon = get_exe_icon(win.exe_path)
+            self._icon_cache[cache_key] = icon
+        return self._icon_cache[cache_key]
 
     def search_programs(self, query: str) -> list[ProgramInfo]:
         """Fuzzy search installed programs by name."""

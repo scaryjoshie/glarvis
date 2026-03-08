@@ -223,6 +223,11 @@ class SessionTool(AsyncTool):
         """Whether the session has resolved. Checked after intercept to auto-exit context."""
         return False
 
+    def get_context_info(self) -> str | None:
+        """Extra context injected into the system message while this session is active.
+        Called every turn by prepare_for_turn(). Return None to add nothing."""
+        return None
+
     def get_context_intercepts(self) -> list[Intercept]:
         """Context intercepts. Called at enter_context(), removed at exit_context().
         Override to register keywords/functions active only while this session's context is active."""

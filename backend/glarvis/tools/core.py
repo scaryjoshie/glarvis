@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from glarvis.tool import InlineTool, TaskResult
+from glarvis.tool import Intercept, InlineTool, Keyword, TaskResult
 
 if TYPE_CHECKING:
     from glarvis.mute_gate import MuteGate
@@ -24,6 +24,9 @@ class Mute(InlineTool):
 
     def __init__(self, mute_gate: MuteGate):
         self._gate = mute_gate
+
+    def get_intercepts(self) -> list[Intercept]:
+        return [Keyword("mute", self.run), Keyword("mute me", self.run)]
 
     async def run(self, **kwargs) -> TaskResult:
         await self._gate.set_muted(True)

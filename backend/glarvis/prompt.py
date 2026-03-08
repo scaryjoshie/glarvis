@@ -46,7 +46,8 @@ Common Workflows:
 def build_system_message(
     task_snapshot: str | None,
     active_contexts: dict[str, tuple[str, list[str]]],  # task_id → (tool_name, [context_tool_names])
-    system_state: SystemState | None,
+    context_infos: dict[str, tuple[str, str]] | None = None,  # task_id → (tool_name, info_text)
+    system_state: SystemState | None = None,
 ) -> str:
     """Build the full system message with base prompt + injected state."""
     sections = []
@@ -61,6 +62,11 @@ def build_system_message(
         for task_id, (tool_name, tool_names) in active_contexts.items():
             ctx_lines.append(f"  {tool_name} (session {task_id}): {', '.join(tool_names)}")
         sections.append("[Active Session Contexts — use these tools]\n" + "\n".join(ctx_lines))
+
+    # Session-injected context info
+    if context_infos:
+        for task_id, (tool_name, info) in context_infos.items():
+            sections.append(f"[{tool_name} — session {task_id}]\n{info}")
 
     # System state
     if system_state:

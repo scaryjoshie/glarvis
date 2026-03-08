@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from glarvis.system.monitor import SystemMonitor
 
 
+
 class Orchestrator:
     def __init__(
         self,
@@ -203,9 +204,11 @@ class Orchestrator:
 
     async def execute_tool(self, tool_name: str, kwargs: dict) -> TaskResult:
         """Programmatically execute a tool, exactly as if the LLM called it."""
+        # Strip _prefixed keys (side-channel data like _icons) from transcript
+        visible_kwargs = {k: v for k, v in kwargs.items() if not k.startswith("_")}
         await self.broadcast_transcript(
             "assistant", tool_name, entry_type="tool_call",
-            tool=tool_name, tool_args=kwargs,
+            tool=tool_name, tool_args=visible_kwargs,
         )
 
         try:
@@ -237,6 +240,15 @@ class Orchestrator:
         if not tool:
             return TaskResult(result=f"Error: unknown tool {tool_name}")
 
+        # Auto-dismiss transient sessions when the LLM calls a base tool directly
+        # (e.g. user says "terminal" and LLM calls focus_window, bypassing multi_choice)
+        for task_id, state in list(self._active_contexts.items()):
+            if isinstance(state.tool, SessionTool) and not state.tool.persist_in_display:
+                try:
+                    await state.tool.handle_context_call("dismiss")
+                except Exception:
+                    pass
+
         # SessionTool — existing session gets on_input, new one spawns
         if isinstance(tool, SessionTool):
             active = self._find_active_session(tool_name)
@@ -245,6 +257,9 @@ class Orchestrator:
             task_id = await self.task_manager.spawn(tool, kwargs)
             if tool.auto_enter_context:
                 self.enter_context(task_id)
+            if not tool.persist_in_display:
+                # Transient picker (e.g. show_choices) — popup handles it, LLM should stay quiet
+                return TaskResult(result="Shown to user. Do not speak, wait for their selection.")
             return TaskResult(
                 result=f"Session {task_id} started",
                 guide=f"{tool.name} session is running",
@@ -314,14 +329,19 @@ class Orchestrator:
 
         # Gather active context info
         active_contexts = {}
+        context_infos = {}
         for task_id, state in self._active_contexts.items():
             tool_names = [t.name for t in state.tool.get_context_tools()]
             active_contexts[task_id] = (state.tool.name, tool_names)
+            info = state.tool.get_context_info()
+            if info:
+                context_infos[task_id] = (state.tool.name, info)
 
         sys_state = self.system_monitor.state if self.system_monitor else None
         content = build_system_message(
             task_snapshot=self.task_manager.snapshot(),
             active_contexts=active_contexts,
+            context_infos=context_infos,
             system_state=sys_state,
         )
 
