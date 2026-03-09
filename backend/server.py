@@ -177,6 +177,27 @@ async def api_set_speed(body: dict):
     return {"ok": ok, "services": get_service_status()}
 
 
+@app.get("/api/system-context")
+async def get_system_context():
+    """Return current system state for the System Context UI panel."""
+    if not session or not session.orchestrator or not session.orchestrator.monitor:
+        return {"windows": [], "clipboard": None, "time": None}
+    state = session.orchestrator.monitor.state
+    windows = [
+        {
+            "process": w.app,
+            "title": w.title,
+            "focused": w.id == state.foreground_id,
+        }
+        for w in state.windows
+    ]
+    return {
+        "windows": windows,
+        "clipboard": state.clipboard[:200] if state.clipboard else None,
+        "time": state.time,
+    }
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
