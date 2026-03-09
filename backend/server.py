@@ -210,6 +210,9 @@ async def _handle_ws_message(msg: dict):
     elif msg_type == "hard_mute":
         if session and session.mute_gate:
             session.mute_gate.hard_muted = msg.get("muted", False)
+    elif msg_type == "deafen":
+        if session and session.tts_gate:
+            await session.tts_gate.set_deafened(msg.get("deafened", False))
     elif msg_type == "popup_action":
         if session and session.orchestrator:
             await session.orchestrator.handle_popup_action(

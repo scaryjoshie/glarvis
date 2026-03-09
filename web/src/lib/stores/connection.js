@@ -457,10 +457,9 @@ export function toggleDeafen() {
   deafened.update(d => {
     const next = !d;
     if (remoteAudio) remoteAudio.muted = next;
-    // Deafen implies mute
-    if (next && localStream) {
-      muted.set(true);
-      localStream.getAudioTracks().forEach(t => t.enabled = false);
+    // Tell backend to skip TTS when deafened (saves API costs)
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'deafen', deafened: next }));
     }
     return next;
   });

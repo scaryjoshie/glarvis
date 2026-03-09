@@ -23,6 +23,7 @@ from glarvis.mute_gate import MuteGate
 from glarvis.orchestrator import Orchestrator
 from glarvis.prompt import BASE_PROMPT
 from glarvis.response_capture import ResponseCapture
+from glarvis.tts_gate import TTSGate
 from glarvis.system import SystemMonitor
 from glarvis.task_manager import TaskManager
 from glarvis.tools.core import CloseBoard, DebugContext, EnterSession, ExitSession, ListTools, Mute, OpenSettings, Restart, Shutdown
@@ -44,6 +45,7 @@ class PipelineSession:
         self.task: PipelineTask | None = None
         self.orchestrator: Orchestrator | None = None
         self.mute_gate: MuteGate | None = None
+        self.tts_gate: TTSGate | None = None
         self.system_monitor: SystemMonitor | None = None
         self.model_display: str = ""
 
@@ -78,6 +80,7 @@ def build_session(
     
     # Mute gate and system monitor
     mute_gate = MuteGate(broadcast=broadcast)
+    tts_gate = TTSGate(broadcast=broadcast)
     system_monitor = SystemMonitor()
     system_monitor.start()
 
@@ -129,6 +132,7 @@ def build_session(
         BoardContextInjector(orchestrator),
         llm,
         ResponseCapture(orchestrator),
+        tts_gate,
         tts,
         transport.output(),
         assistant_aggregator,
@@ -147,6 +151,7 @@ def build_session(
     session.task = task
     session.orchestrator = orchestrator
     session.mute_gate = mute_gate
+    session.tts_gate = tts_gate
     session.system_monitor = system_monitor
 
     return session
