@@ -31,10 +31,12 @@ _COMMANDS: dict[str, str] = {
     "copy that": "copy",
     "clear": "clear",
     "clear all": "clear",
-    "stop": "stop",
-    "stop transcribing": "stop",
-    "cancel": "stop",
-    "done": "stop",
+    "close": "close",
+    "close transcriber": "close",
+    "exit": "close",
+    "stop": "pause",
+    "stop transcribing": "close",
+    "start": "resume",
     "pause": "pause",
     "resume": "resume",
     "unpause": "resume",
@@ -162,7 +164,7 @@ class TranscriberSession(SessionTool):
                 await self._do_copy()
             elif action == "clear":
                 await self._do_clear()
-            elif action == "stop":
+            elif action == "close":
                 await self._do_stop()
             elif action == "pause":
                 await self._do_pause()
@@ -265,6 +267,11 @@ class TranscriberSession(SessionTool):
     # ── Actions ──────────────────────────────────────────────────────────
 
     async def _do_send(self) -> TaskResult:
+        # Auto-edit if enabled and not already edited
+        from glarvis.settings import load_settings
+        if load_settings().transcriber.auto_edit and not self._edited_text:
+            await self._do_edit()
+
         # Prefer edited text (right pane) over raw buffer
         text = self._edited_text if self._edited_text else " ".join(self._buffer)
         if not text:
@@ -278,6 +285,8 @@ class TranscriberSession(SessionTool):
             self._focus_target()
             time.sleep(0.15)  # let the window come to foreground
 
+        if getattr(self, '_submit_mode', False):
+            text += "\n"
         success = paste_text(text)
         if success:
             self._buffer.clear()
@@ -289,7 +298,12 @@ class TranscriberSession(SessionTool):
         return TaskResult(result="Failed to paste text.", guide="Paste failed.")
 
     async def _do_copy(self) -> TaskResult:
-        text = " ".join(self._buffer)
+        # Auto-edit if enabled and not already edited
+        from glarvis.settings import load_settings
+        if load_settings().transcriber.auto_edit and not self._edited_text:
+            await self._do_edit()
+
+        text = self._edited_text if self._edited_text else " ".join(self._buffer)
         if not text:
             return TaskResult(result="Nothing to copy.", guide="Buffer is empty.")
 
@@ -399,13 +413,12 @@ class TranscriberSession(SessionTool):
         return await self._do_edit(instruction)
 
     async def _do_submit(self) -> TaskResult:
-        """Send text + press Enter in the target window."""
+        """Send text + newline to the target window."""
+        # Append newline to buffer before sending so paste includes Enter
+        self._submit_mode = True
         result = await self._do_send()
+        self._submit_mode = False
         if result.guide == "Sent.":
-            import time
-            from glarvis.system.windows import send_key
-            time.sleep(0.1)
-            send_key(0x0D)  # VK_RETURN
             return TaskResult(result="Text submitted.", guide="Submitted.")
         return result
 

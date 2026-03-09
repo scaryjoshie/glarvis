@@ -53,6 +53,7 @@
   let transcriberEditPrompt = 'clean up grammar and formatting';
   let transcriberShowDiff = true;
   let transcriberSnapToBottom = true;
+  let transcriberAutoEdit = false;
   let settingsInitialized = false;
 
   function initFromData(d) {
@@ -67,6 +68,7 @@
     transcriberEditPrompt = d.transcriber?.edit_prompt || 'clean up grammar and formatting';
     transcriberShowDiff = d.transcriber?.show_diff !== false;
     transcriberSnapToBottom = d.transcriber?.snap_to_bottom !== false;
+    transcriberAutoEdit = d.transcriber?.auto_edit || false;
     llmHasOverride = d.llm?.has_override || false;
     ttsHasOverride = d.tts?.has_override || false;
     sttHasOverride = d.stt?.has_override || false;
@@ -78,7 +80,7 @@
     settingsInitialized = true;
   }
 
-  $: if ($settingsOpen && !settingsInitialized && Object.keys($settingsData.services).length > 0) {
+  $: if ($settingsOpen && !settingsInitialized && $settingsData?.services && Object.keys($settingsData.services).length > 0) {
     initFromData($settingsData);
   }
 
@@ -362,7 +364,7 @@
       llm: { provider: llmProvider, model: llmModel },
       tts: { provider: ttsProvider, voice_id: ttsVoice },
       stt: { provider: sttProvider, model: sttModel },
-      transcriber: { provider: transcriberProvider, model: transcriberModel, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff, snap_to_bottom: transcriberSnapToBottom },
+      transcriber: { provider: transcriberProvider, model: transcriberModel, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff, snap_to_bottom: transcriberSnapToBottom, auto_edit: transcriberAutoEdit },
     };
     // Include api_key only if changed
     if (pendingKeyValues.llm) payload.llm.api_key = pendingKeyValues.llm;
@@ -388,7 +390,7 @@
         llm: { ...sd.llm, provider: llmProvider, model: llmModel, has_override: llmHasOverride },
         tts: { ...sd.tts, provider: ttsProvider, voice_id: ttsVoice, has_override: ttsHasOverride },
         stt: { ...sd.stt, provider: sttProvider, model: sttModel, has_override: sttHasOverride },
-        transcriber: { ...sd.transcriber, provider: transcriberProvider, model: transcriberModel, has_override: transcriberHasOverride, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff, snap_to_bottom: transcriberSnapToBottom },
+        transcriber: { ...sd.transcriber, provider: transcriberProvider, model: transcriberModel, has_override: transcriberHasOverride, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff, snap_to_bottom: transcriberSnapToBottom, auto_edit: transcriberAutoEdit },
       }));
       settingsOpen.set(false);
     }
@@ -588,6 +590,17 @@
                 on:click={() => transcriberSnapToBottom = !transcriberSnapToBottom}
               >
                 {transcriberSnapToBottom ? 'ON' : 'OFF'}
+              </button>
+            </div>
+
+            <div class="transcriber-field toggle-row">
+              <label class="field-label">Auto-Edit Before Send/Copy</label>
+              <button
+                class="toggle-btn"
+                class:on={transcriberAutoEdit}
+                on:click={() => transcriberAutoEdit = !transcriberAutoEdit}
+              >
+                {transcriberAutoEdit ? 'ON' : 'OFF'}
               </button>
             </div>
 

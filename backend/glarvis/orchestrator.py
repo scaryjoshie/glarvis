@@ -500,6 +500,10 @@ class Orchestrator:
         if not win:
             return
 
+        # Ignore Minerva's own windows (popups, main window) — keep current context
+        if win.app == "minerva" or win.title == "Minerva":
+            return
+
         # Find an active AppSessionTool that matches the newly focused window
         for task_id, state in self.task_manager.active.items():
             if isinstance(state.tool, AppSessionTool) and state.tool.matches_window(win):
@@ -507,6 +511,15 @@ class Orchestrator:
                     self.enter_context(task_id)
                     logger.info(f"[Orchestrator] Focus → entered app context: {state.tool.name}")
                 return
+
+    # ── Auto-spawn ────────────────────────────────────────────────────────────
+
+    async def auto_spawn_app_sessions(self):
+        """Spawn all registered AppSessionTools so they're alive for focus events."""
+        for tool in self._tools.values():
+            if isinstance(tool, AppSessionTool):
+                task_id = await self.task_manager.spawn(tool, {})
+                logger.info(f"[Orchestrator] Auto-spawned app session: {tool.name} ({task_id})")
 
     # ── TaskManager callbacks ────────────────────────────────────────────────
 

@@ -325,6 +325,21 @@ def send_key(vk_code: int) -> bool:
         return False
 
 
+def send_key_combo(*vk_codes: int) -> bool:
+    """Send a key combination (e.g. Ctrl+Tab). Presses all keys down, then releases in reverse."""
+    try:
+        n = len(vk_codes)
+        inputs = (INPUT * (n * 2))()
+        for i, vk in enumerate(vk_codes):
+            inputs[i] = _make_key(vk)
+        for i, vk in enumerate(reversed(vk_codes)):
+            inputs[n + i] = _make_key(vk, KEYEVENTF_KEYUP)
+        ctypes.windll.user32.SendInput(n * 2, inputs, ctypes.sizeof(INPUT))
+        return True
+    except Exception:
+        return False
+
+
 def paste_text(text: str) -> bool:
     """Paste text into the currently focused window via clipboard + Ctrl+V.
 

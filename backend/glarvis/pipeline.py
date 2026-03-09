@@ -32,6 +32,7 @@ from glarvis.tools.general import (
 )
 from glarvis.settings import load_settings
 from glarvis.tools.multi_choice import MultiChoiceSession
+from glarvis.tools.terminal import TerminalSession
 from glarvis.tools.transcriber import TranscriberSession
 from glarvis.transcript_capture import TranscriptCapture
 
@@ -99,6 +100,7 @@ def build_session(
     orchestrator.register(DebugContext(orchestrator))
     orchestrator.register(EnterSession(orchestrator))
     orchestrator.register(ExitSession(orchestrator))
+    orchestrator.register(TerminalSession())
 
     # Rebuild context with gathered tools schema
     context.set_tools(orchestrator.get_tools_schema())

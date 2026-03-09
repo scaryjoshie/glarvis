@@ -35,17 +35,22 @@ class Mute(InlineTool):
 
 class OpenSettings(InlineTool):
     name = "open_settings"
-    description = "Open the settings window."
+    description = "Open or close the settings window."
 
     def get_intercepts(self) -> list[Intercept]:
         return [
             Keyword("settings", self.run),
             Keyword("open settings", self.run),
+            Keyword("close settings", self._close),
         ]
 
     async def run(self, **kwargs) -> TaskResult:
         await self.handle.broadcast({"type": "open_settings"})
         return TaskResult(result="Settings opened.", guide="Opened.")
+
+    async def _close(self, **kwargs) -> TaskResult:
+        await self.handle.broadcast({"type": "close_settings"})
+        return TaskResult(result="Settings closed.", guide="Closed.")
 
 
 class CloseBoard(InlineTool):

@@ -287,6 +287,9 @@ function _connectWs() {
       case 'open_settings':
         openPopup('settings', 'settings', {});
         break;
+      case 'close_settings':
+        settingsOpen.set(false);
+        break;
       case 'settings':
         settingsData.set({
           llm: msg.llm || {},

@@ -28,7 +28,7 @@ from glarvis.services import (
     edit_service_voice,
     set_provider_speed,
 )
-from glarvis.settings import LLMSettings, TTSSettings, STTSettings, TranscriberSettings, Settings, load_settings, save_settings
+from glarvis.settings import LLMSettings, TTSSettings, STTSettings, TranscriberSettings, TerminalSettings, Settings, load_settings, save_settings
 
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
@@ -95,6 +95,7 @@ def _settings_payload(settings: Settings) -> dict:
             "edit_prompt": settings.transcriber.edit_prompt,
             "show_diff": settings.transcriber.show_diff,
             "snap_to_bottom": settings.transcriber.snap_to_bottom,
+            "auto_edit": settings.transcriber.auto_edit,
         },
         "services": status,
     }
@@ -144,6 +145,7 @@ async def post_settings(body: dict):
             edit_prompt=transcriber_data.get("edit_prompt", existing.transcriber.edit_prompt),
             show_diff=transcriber_data.get("show_diff", existing.transcriber.show_diff),
             snap_to_bottom=transcriber_data.get("snap_to_bottom", existing.transcriber.snap_to_bottom),
+            auto_edit=transcriber_data.get("auto_edit", existing.transcriber.auto_edit),
         ),
     )
     save_settings(settings)
@@ -252,6 +254,7 @@ async def _handle_ws_message(msg: dict):
                 edit_prompt=transcriber_data.get("edit_prompt", existing.transcriber.edit_prompt),
                 show_diff=transcriber_data.get("show_diff", existing.transcriber.show_diff),
                 snap_to_bottom=transcriber_data.get("snap_to_bottom", existing.transcriber.snap_to_bottom),
+                auto_edit=transcriber_data.get("auto_edit", existing.transcriber.auto_edit),
             ),
         )
         save_settings(settings)
@@ -332,6 +335,7 @@ async def on_new_connection(webrtc_connection: SmallWebRTCConnection):
         logger.info("[Server] Client connected to WebRTC")
         if session is this_session:
             await broadcast({"type": "model_info", "model_display": this_session.model_display})
+            await this_session.orchestrator.auto_spawn_app_sessions()
             await this_session.orchestrator.broadcast_welcome()
 
     @transport.event_handler("on_client_disconnected")
