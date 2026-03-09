@@ -95,13 +95,17 @@ export async function openPopup(popupType, toolName, data) {
     // Scale height to content: ~49px per option + prompt(45) + bottom row(46) + popup padding(16)
     const optionCount = data?.options?.length || 3;
     height = Math.min(optionCount * 49 + 120, 640);
+  } else if (popupType === 'settings') {
+    width = 860;
+    height = 600;
+    resizable = true;
   } else if (popupType === 'transcriber') {
     // Minimized: small pill at bottom-center (expands to 760x440)
     width = 520;
     height = 56;
     center = false;
-    x = Math.round(screen.width / 2 - 260);
-    y = screen.height - 120;
+    x = Math.round(screen.availWidth / 2 - 260 + (screen.availLeft || 0));
+    y = (screen.availTop || 0) + screen.availHeight - height - 10;
     resizable = true;
     transparent = true;
   }
@@ -272,8 +276,16 @@ function _connectWs() {
           });
         } catch {}
         break;
+      case 'transcriber_sent':
+        try {
+          emitTo('popup_transcribe', 'transcriber-sent', {});
+        } catch {}
+        break;
       case 'model_info':
         modelDisplay.set(msg.model_display);
+        break;
+      case 'open_settings':
+        openPopup('settings', 'settings', {});
         break;
       case 'settings':
         settingsData.set({

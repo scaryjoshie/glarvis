@@ -94,6 +94,7 @@ def _settings_payload(settings: Settings) -> dict:
             "has_override": bool(settings.transcriber.api_key),
             "edit_prompt": settings.transcriber.edit_prompt,
             "show_diff": settings.transcriber.show_diff,
+            "snap_to_bottom": settings.transcriber.snap_to_bottom,
         },
         "services": status,
     }
@@ -105,6 +106,47 @@ async def get_settings(reload: bool = False):
         from glarvis.services.registry import reload_config
         reload_config()
     settings = load_settings()
+    return _settings_payload(settings)
+
+
+@app.post("/api/settings")
+async def post_settings(body: dict):
+    """REST endpoint for saving settings (used by popup window)."""
+    existing = load_settings()
+    llm_data = body.get("llm", {})
+    tts_data = body.get("tts", {})
+    stt_data = body.get("stt", {})
+    transcriber_data = body.get("transcriber", {})
+    llm_key = llm_data.get("api_key")
+    tts_key = tts_data.get("api_key")
+    stt_key = stt_data.get("api_key")
+    transcriber_key = transcriber_data.get("api_key")
+    settings = Settings(
+        llm=LLMSettings(
+            provider=llm_data.get("provider", existing.llm.provider),
+            model=llm_data.get("model", existing.llm.model),
+            api_key=existing.llm.api_key if llm_key is None else llm_key,
+        ),
+        tts=TTSSettings(
+            provider=tts_data.get("provider", existing.tts.provider),
+            voice_id=tts_data.get("voice_id", existing.tts.voice_id),
+            api_key=existing.tts.api_key if tts_key is None else tts_key,
+        ),
+        stt=STTSettings(
+            provider=stt_data.get("provider", existing.stt.provider),
+            model=stt_data.get("model", existing.stt.model),
+            api_key=existing.stt.api_key if stt_key is None else stt_key,
+        ),
+        transcriber=TranscriberSettings(
+            provider=transcriber_data.get("provider", existing.transcriber.provider),
+            model=transcriber_data.get("model", existing.transcriber.model),
+            api_key=existing.transcriber.api_key if transcriber_key is None else transcriber_key,
+            edit_prompt=transcriber_data.get("edit_prompt", existing.transcriber.edit_prompt),
+            show_diff=transcriber_data.get("show_diff", existing.transcriber.show_diff),
+            snap_to_bottom=transcriber_data.get("snap_to_bottom", existing.transcriber.snap_to_bottom),
+        ),
+    )
+    save_settings(settings)
     return _settings_payload(settings)
 
 
@@ -209,6 +251,7 @@ async def _handle_ws_message(msg: dict):
                 api_key=existing.transcriber.api_key if transcriber_key is None else transcriber_key,
                 edit_prompt=transcriber_data.get("edit_prompt", existing.transcriber.edit_prompt),
                 show_diff=transcriber_data.get("show_diff", existing.transcriber.show_diff),
+                snap_to_bottom=transcriber_data.get("snap_to_bottom", existing.transcriber.snap_to_bottom),
             ),
         )
         save_settings(settings)

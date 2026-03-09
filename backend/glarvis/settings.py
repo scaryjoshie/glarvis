@@ -44,6 +44,7 @@ class TranscriberSettings:
     api_key: str = ""  # if empty, falls back to env var
     edit_prompt: str = "clean up grammar and formatting"
     show_diff: bool = True
+    snap_to_bottom: bool = True
 
 
 @dataclass

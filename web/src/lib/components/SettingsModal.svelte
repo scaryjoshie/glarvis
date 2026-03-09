@@ -1,12 +1,44 @@
 <script>
-  import { settingsOpen, settingsData, saveSettings, reloadSettings, sfxVolume, voiceVolume } from '../stores/connection.js';
+  import { onMount } from 'svelte';
+  import { writable } from 'svelte/store';
+  import { getCurrentWindow } from '@tauri-apps/api/window';
+  // In popup mode, stores aren't connected — we use local state + REST
+  import { settingsOpen as _settingsOpen, settingsData as _settingsData, saveSettings as _saveSettings, reloadSettings as _reloadSettings, sfxVolume, voiceVolume } from '../stores/connection.js';
+
+  export let popupMode = false;
+
+  // In popup mode, create local stores so the rest of the component works unchanged
+  const localOpen = writable(true);
+  const localData = writable({});
+  const settingsOpen = popupMode ? localOpen : _settingsOpen;
+  const settingsData = popupMode ? localData : _settingsData;
 
   let reloading = false;
   async function reload() {
     reloading = true;
-    await reloadSettings();
+    if (popupMode) {
+      try {
+        const res = await fetch('/api/settings?reload=true');
+        if (res.ok) localData.set(await res.json());
+      } catch {}
+    } else {
+      await _reloadSettings();
+    }
     reloading = false;
   }
+
+  onMount(async () => {
+    if (popupMode) {
+      try {
+        const res = await fetch('/api/settings');
+        if (res.ok) {
+          const data = await res.json();
+          localData.set(data);
+          initFromData(data);
+        }
+      } catch {}
+    }
+  });
 
   // ── Selection state (synced from store on open, once) ─────────────────────
 
@@ -20,6 +52,7 @@
   let transcriberModel = '';
   let transcriberEditPrompt = 'clean up grammar and formatting';
   let transcriberShowDiff = true;
+  let transcriberSnapToBottom = true;
   let settingsInitialized = false;
 
   function initFromData(d) {
@@ -33,6 +66,7 @@
     transcriberModel = d.transcriber?.model || 'claude-haiku-4-5-20251001';
     transcriberEditPrompt = d.transcriber?.edit_prompt || 'clean up grammar and formatting';
     transcriberShowDiff = d.transcriber?.show_diff !== false;
+    transcriberSnapToBottom = d.transcriber?.snap_to_bottom !== false;
     llmHasOverride = d.llm?.has_override || false;
     ttsHasOverride = d.tts?.has_override || false;
     sttHasOverride = d.stt?.has_override || false;
@@ -328,7 +362,7 @@
       llm: { provider: llmProvider, model: llmModel },
       tts: { provider: ttsProvider, voice_id: ttsVoice },
       stt: { provider: sttProvider, model: sttModel },
-      transcriber: { provider: transcriberProvider, model: transcriberModel, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff },
+      transcriber: { provider: transcriberProvider, model: transcriberModel, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff, snap_to_bottom: transcriberSnapToBottom },
     };
     // Include api_key only if changed
     if (pendingKeyValues.llm) payload.llm.api_key = pendingKeyValues.llm;
@@ -340,23 +374,33 @@
     if (pendingKeyValues.transcriber) payload.transcriber.api_key = pendingKeyValues.transcriber;
     else if (pendingKeyClears.transcriber) payload.transcriber.api_key = '';
 
-    saveSettings(payload);
-
-    // Update local store so next open reflects the save immediately
-    settingsData.update(sd => ({
-      ...sd,
-      llm: { ...sd.llm, provider: llmProvider, model: llmModel, has_override: llmHasOverride },
-      tts: { ...sd.tts, provider: ttsProvider, voice_id: ttsVoice, has_override: ttsHasOverride },
-      stt: { ...sd.stt, provider: sttProvider, model: sttModel, has_override: sttHasOverride },
-      transcriber: { ...sd.transcriber, provider: transcriberProvider, model: transcriberModel, has_override: transcriberHasOverride, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff },
-    }));
-
-    settingsOpen.set(false);
+    if (popupMode) {
+      fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      }).catch(() => {});
+      try { getCurrentWindow().close(); } catch {}
+    } else {
+      _saveSettings(payload);
+      settingsData.update(sd => ({
+        ...sd,
+        llm: { ...sd.llm, provider: llmProvider, model: llmModel, has_override: llmHasOverride },
+        tts: { ...sd.tts, provider: ttsProvider, voice_id: ttsVoice, has_override: ttsHasOverride },
+        stt: { ...sd.stt, provider: sttProvider, model: sttModel, has_override: sttHasOverride },
+        transcriber: { ...sd.transcriber, provider: transcriberProvider, model: transcriberModel, has_override: transcriberHasOverride, edit_prompt: transcriberEditPrompt, show_diff: transcriberShowDiff, snap_to_bottom: transcriberSnapToBottom },
+      }));
+      settingsOpen.set(false);
+    }
     cleanup();
   }
 
   function close() {
-    settingsOpen.set(false);
+    if (popupMode) {
+      try { getCurrentWindow().close(); } catch {}
+    } else {
+      settingsOpen.set(false);
+    }
     cleanup();
   }
 
@@ -370,7 +414,7 @@
   }
 
   function onKeydown(e) {
-    if (e.key === 'Escape' && $settingsOpen) close();
+    if (e.key === 'Escape') close();
   }
 
   function onBackdropClick(e) {
@@ -389,10 +433,10 @@
 
 <svelte:window on:keydown={onKeydown} />
 
-{#if $settingsOpen}
+{#if popupMode || $settingsOpen}
   <!-- svelte-ignore a11y-click-events-have-key-events -->
-  <div class="backdrop" on:click={onBackdropClick}>
-    <div class="modal">
+  <div class={popupMode ? 'popup-fill' : 'backdrop'} on:click={popupMode ? null : onBackdropClick}>
+    <div class="modal" class:popup-mode={popupMode}>
 
       <!-- Nav sidebar -->
       <div class="sidebar">
@@ -533,6 +577,17 @@
                 on:click={() => transcriberShowDiff = !transcriberShowDiff}
               >
                 {transcriberShowDiff ? 'ON' : 'OFF'}
+              </button>
+            </div>
+
+            <div class="transcriber-field toggle-row">
+              <label class="field-label">Snap to Bottom</label>
+              <button
+                class="toggle-btn"
+                class:on={transcriberSnapToBottom}
+                on:click={() => transcriberSnapToBottom = !transcriberSnapToBottom}
+              >
+                {transcriberSnapToBottom ? 'ON' : 'OFF'}
               </button>
             </div>
 
@@ -765,6 +820,12 @@
     z-index: 1000;
   }
 
+  .popup-fill {
+    width: 100%;
+    height: 100vh;
+    display: flex;
+  }
+
   .modal {
     background: var(--color-surface);
     border: 1px solid var(--color-border);
@@ -776,6 +837,16 @@
     display: flex;
     overflow: hidden;
     box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4);
+  }
+
+  .modal.popup-mode {
+    width: 100%;
+    max-width: 100%;
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+    border: none;
+    box-shadow: none;
   }
 
   /* ── Nav sidebar ────────────────────────────── */

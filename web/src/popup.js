@@ -9,13 +9,18 @@ import './app.css';
 import MultiChoice from './lib/popups/MultiChoice.svelte';
 import BoardNotify from './lib/popups/BoardNotify.svelte';
 import Transcriber from './lib/popups/Transcriber.svelte';
+import SettingsModal from './lib/components/SettingsModal.svelte';
 const el = document.getElementById('popup');
 
 const components = {
   multi_choice: MultiChoice,
   board_notify: BoardNotify,
   transcriber: Transcriber,
+  settings: SettingsModal,
 };
+
+// Settings popup is self-contained (fetches via REST), doesn't need data from main window
+const selfContained = new Set(['settings']);
 
 try {
   const hash = window.location.hash.slice(1);
@@ -26,6 +31,12 @@ try {
     const Component = components[popupType];
     if (!Component) {
       el.innerHTML = `<p style="color:red;padding:20px;">Unknown popup type: ${popupType}</p>`;
+    } else if (selfContained.has(popupType)) {
+      // Self-contained popups fetch their own data (e.g. settings via REST)
+      mount(Component, {
+        target: el,
+        props: { popupMode: true, toolName },
+      });
     } else {
       // Listen for data, then request it from main window
       listen('popup-data', (event) => {

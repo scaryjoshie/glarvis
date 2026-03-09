@@ -17,7 +17,7 @@ import os
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
-from glarvis.tool import SessionTool, TaskResult
+from glarvis.tool import Intercept, Keyword, SessionTool, TaskResult
 
 
 # Voice commands — exact match only (after strip + lower)
@@ -56,7 +56,16 @@ class TranscriberSession(SessionTool):
     cancel_on_interruption = False
     auto_enter_context = True
     monitors_speech = True
-    hides_speech = True
+    silent_popup_actions = True
+
+    @property
+    def hides_speech(self) -> bool:
+        return not getattr(self, '_paused', False)
+
+    def get_intercepts(self) -> list[Intercept]:
+        async def _start():
+            return await self.handle.execute_tool("transcribe")
+        return [Keyword("transcribe", _start)]
 
     async def run(self, **kwargs) -> TaskResult:
         self._buffer: list[str] = []
@@ -80,6 +89,7 @@ class TranscriberSession(SessionTool):
             "paused": False,
             "edit_prompt": ts.edit_prompt,
             "show_diff": ts.show_diff,
+            "snap_to_bottom": ts.snap_to_bottom,
         })
 
         # Block until session ends
@@ -99,9 +109,10 @@ class TranscriberSession(SessionTool):
         fg_id = self.system.state.foreground_id
         if fg_id is None:
             return
-        # Find the hwnd for this stable ID
         for win in self.system.state.windows:
             if win.id == fg_id:
+                if win.app == "minerva" or win.title == "Minerva":
+                    return
                 self._target_hwnd = win.hwnd
                 logger.debug(f"[Transcriber] Target window: {win.title} (hwnd={win.hwnd})")
                 return
@@ -242,6 +253,13 @@ class TranscriberSession(SessionTool):
             settings.transcriber.show_diff = bool(show)
             save_settings(settings)
             return TaskResult(result="Show diff setting saved.")
+        elif tool_name == "transcriber_set_snap":
+            from glarvis.settings import load_settings, save_settings
+            snap = kwargs.get("snap_to_bottom", True)
+            settings = load_settings()
+            settings.transcriber.snap_to_bottom = bool(snap)
+            save_settings(settings)
+            return TaskResult(result="Snap setting saved.")
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
 
     # ── Actions ──────────────────────────────────────────────────────────
@@ -266,6 +284,7 @@ class TranscriberSession(SessionTool):
             self._edited_text = None
             if self._popup_open:
                 await self._update_popup("")
+                await self.handle.broadcast({"type": "transcriber_sent"})
             return TaskResult(result="Text pasted.", guide="Sent.")
         return TaskResult(result="Failed to paste text.", guide="Paste failed.")
 

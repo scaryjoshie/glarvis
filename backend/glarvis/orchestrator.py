@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import deque
 from typing import TYPE_CHECKING, Any, Callable, Coroutine
 
 from loguru import logger
@@ -261,6 +262,12 @@ class Orchestrator:
             active = self._find_active_session(tool_name)
             if active:
                 return await active.tool.on_input(**kwargs)
+            # Clear completed instances from history so they don't linger in display
+            self.task_manager.history = deque(
+                (s for s in self.task_manager.history if s.tool.name != tool_name),
+                maxlen=self.task_manager.history.maxlen,
+            )
+            self.task_manager._notify_change()
             task_id = await self.task_manager.spawn(tool, kwargs)
             if tool.auto_enter_context:
                 self.enter_context(task_id)
@@ -306,23 +313,23 @@ class Orchestrator:
 
         if result and result.board_content:
             await self.broadcast_board_post(tool_name, result.board_content)
-        await self.broadcast_transcript(
-            "user", action, entry_type="popup_action",
-            tool=tool_name, tool_args=data,
-            tool_result=result.result if result else None,
-        )
 
-        # Inject as user text so the LLM processes the selection
-        # Skip for hides_speech sessions (e.g. transcriber) — guide would leak into chat
-        if result and result.guide and self.pipeline_task:
-            skip = isinstance(state.tool, SessionTool) and state.tool.hides_speech
-            if not skip:
-                frame = TranscriptionFrame(
-                    text=f"[{result.guide}]",
-                    user_id="popup",
-                    timestamp=str(time.time()),
-                )
-                await self.pipeline_task.queue_frame(frame)
+        # Let tools opt out of chat log entries for popup actions
+        silent = isinstance(state.tool, SessionTool) and state.tool.silent_popup_actions
+        if not silent:
+            await self.broadcast_transcript(
+                "user", action, entry_type="popup_action",
+                tool=tool_name, tool_args=data,
+                tool_result=result.result if result else None,
+            )
+
+        if result and result.guide and self.pipeline_task and not silent:
+            frame = TranscriptionFrame(
+                text=f"[{result.guide}]",
+                user_id="popup",
+                timestamp=str(time.time()),
+            )
+            await self.pipeline_task.queue_frame(frame)
 
     # ── Pre-turn preparation ─────────────────────────────────────────────────
 

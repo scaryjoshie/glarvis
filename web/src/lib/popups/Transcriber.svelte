@@ -10,10 +10,12 @@
   export let toolName = '';
   export let edit_prompt = 'clean up grammar and formatting';
   export let show_diff = true;
+  export let snap_to_bottom = true;
 
   let currentText = text || '';
   let expanded = mode === 'maximized';
   let recording = !paused;
+  let snapToBottom = snap_to_bottom;
   let scrollContainer;
   let rightScrollContainer;
   let unlistens = [];
@@ -41,6 +43,9 @@
   onMount(async () => {
     unlistens.push(await listen('transcriber-update', (event) => {
       currentText = event.payload.text || '';
+      if (leftEditable && document.activeElement !== leftEditable && !showDiff) {
+        leftEditable.innerText = currentText;
+      }
       if (expanded && scrollContainer && !isEditing) {
         requestAnimationFrame(() => {
           scrollContainer.scrollTop = scrollContainer.scrollHeight;
@@ -64,6 +69,29 @@
       currentText = event.payload.original;
       showDiff = true;
       isEditing = false;
+    }));
+    unlistens.push(await listen('transcriber-sent', () => {
+      afterSendOrSubmit();
+    }));
+
+    // Snap to bottom: keep vertical position locked, allow horizontal movement.
+    // If dragged far enough vertically (>100px from bottom), let it stay.
+    let snapTimer = null;
+    let snapping = false;
+    const win = getCurrentWindow();
+    unlistens.push(await win.onMoved(({ payload }) => {
+      if (!snapToBottom || expanded || snapping) return;
+      clearTimeout(snapTimer);
+      snapTimer = setTimeout(async () => {
+        const bottomY = (screen.availTop || 0) + screen.availHeight - 56 - 10;
+        const currentY = payload.y;
+        // If close enough vertically, snap Y but keep X
+        if (Math.abs(currentY - bottomY) < 100) {
+          snapping = true;
+          try { await win.setPosition(new LogicalPosition(payload.x, bottomY)); } catch {}
+          setTimeout(() => { snapping = false; }, 100);
+        }
+      }, 300);
     }));
   });
 
@@ -131,6 +159,12 @@
     action('transcriber_set_show_diff', { show_diff: showDiff });
   }
 
+  function getBottomPosition(w = 520, h = 56) {
+    const x = Math.round(screen.availWidth / 2 - w / 2 + (screen.availLeft || 0));
+    const y = (screen.availTop || 0) + screen.availHeight - h - 10;
+    return { x, y };
+  }
+
   // Contenteditable input handlers
   function onLeftInput(e) {
     const newText = e.target.innerText;
@@ -182,9 +216,10 @@
       const win = getCurrentWindow();
       const w = 520, h = 56;
       await win.setSize(new LogicalSize(w, h));
-      const x = Math.round(screen.width / 2 - w / 2);
-      const y = screen.height - 120;
-      await win.setPosition(new LogicalPosition(x, y));
+      if (snapToBottom) {
+        const pos = getBottomPosition(w, h);
+        await win.setPosition(new LogicalPosition(pos.x, pos.y));
+      }
     } catch (e) {
       console.warn('[Transcriber] Resize failed:', e);
     }
@@ -205,6 +240,18 @@
       e.preventDefault();
       doEdit();
     }
+    // Space toggles pause/resume (unless typing in an input)
+    if (e.key === ' ' && !isInputFocused()) {
+      e.preventDefault();
+      toggleRecording();
+    }
+  }
+
+  function isInputFocused() {
+    const el = document.activeElement;
+    if (!el) return false;
+    const tag = el.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
   }
 </script>
 
@@ -264,7 +311,7 @@
         <div class="pane-label">Original</div>
         <div class="pane-body" bind:this={scrollContainer}>
           {#if showDiff && diffResult.length}
-            <div class="diff-view">
+            <div class="diff-view" on:click={() => showDiff = false} role="button" tabindex="-1">
               {#each leftDiff as part}
                 <span class:diff-removed={part.removed}>{part.value}</span>
               {/each}
@@ -301,7 +348,7 @@
               <span class="spinner-text">Editing...</span>
             </div>
           {:else if showDiff && diffResult.length}
-            <div class="diff-view">
+            <div class="diff-view" on:click={() => showDiff = false} role="button" tabindex="-1">
               {#each rightDiff as part}
                 <span class:diff-added={part.added}>{part.value}</span>
               {/each}
@@ -538,8 +585,8 @@
     flex: 1;
     min-width: 0;
     padding-right: 8px;
-    mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
-    -webkit-mask-image: linear-gradient(to right, transparent, black 15%, black 85%, transparent);
+    mask-image: linear-gradient(to right, black 85%, transparent);
+    -webkit-mask-image: linear-gradient(to right, black 85%, transparent);
     cursor: grab;
   }
 
@@ -733,6 +780,7 @@
     line-height: 1.7;
     white-space: pre-wrap;
     word-break: break-word;
+    cursor: pointer;
   }
 
   .diff-removed {

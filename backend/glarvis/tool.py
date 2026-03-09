@@ -205,6 +205,7 @@ class SessionTool(AsyncTool):
     auto_enter_context: bool = True  # enter context automatically on run()
     monitors_speech: bool = False  # when True, on_speech(text) is called for every STT frame
     hides_speech: bool = False  # when True (and monitors_speech), speech doesn't reach the LLM
+    silent_popup_actions: bool = False  # when True, popup actions don't appear in chat transcript
 
     @abstractmethod
     async def on_input(self, **kwargs) -> TaskResult:

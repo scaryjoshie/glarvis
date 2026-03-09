@@ -4,7 +4,7 @@ These tools wire into orchestrator/system internals and are always registered.
 """
 
 from __future__ import annotations
-
+import asyncio
 import os
 import subprocess
 import sys
@@ -31,6 +31,21 @@ class Mute(InlineTool):
     async def run(self, **kwargs) -> TaskResult:
         await self._gate.set_muted(True)
         return TaskResult(result="muted", guide="Muted. Say unmute when you're ready.")
+
+
+class OpenSettings(InlineTool):
+    name = "open_settings"
+    description = "Open the settings window."
+
+    def get_intercepts(self) -> list[Intercept]:
+        return [
+            Keyword("settings", self.run),
+            Keyword("open settings", self.run),
+        ]
+
+    async def run(self, **kwargs) -> TaskResult:
+        await self.handle.broadcast({"type": "open_settings"})
+        return TaskResult(result="Settings opened.", guide="Opened.")
 
 
 class CloseBoard(InlineTool):
@@ -113,7 +128,6 @@ class Shutdown(InlineTool):
     description = "Shut down Minerva completely."
 
     async def run(self, **kwargs) -> TaskResult:
-        import asyncio
 
         project_root = Path(__file__).resolve().parents[3]
         pids_to_kill = _find_project_pids(project_root)
@@ -124,7 +138,7 @@ class Shutdown(InlineTool):
             except OSError:
                 pass
 
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.2)
         os._exit(0)
 
 
