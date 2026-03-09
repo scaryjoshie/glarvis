@@ -185,6 +185,22 @@ function sendPopupAction(toolName, action, data) {
     ws.send(JSON.stringify({ type: 'popup_action', tool_name: toolName, action, data }));
   }
 }
+
+async function handlePickDirectory(msg) {
+  try {
+    const { open } = await import('@tauri-apps/plugin-dialog');
+    const path = await open({ directory: true, title: msg.title || 'Select directory' });
+    if (path && ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({
+        type: 'directory_picked',
+        path,
+        request_id: msg.request_id || null,
+      }));
+    }
+  } catch (e) {
+    console.error('Directory picker failed:', e);
+  }
+}
 let pc = null;
 let localStream = null;
 let pcId = null;
@@ -289,6 +305,9 @@ function _connectWs() {
         break;
       case 'close_settings':
         settingsOpen.set(false);
+        break;
+      case 'pick_directory':
+        handlePickDirectory(msg);
         break;
       case 'settings':
         settingsData.set({

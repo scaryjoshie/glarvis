@@ -137,7 +137,11 @@ class SwitchWindow(InlineTool):
 
         options = []
         icons = {}
-        for i, w in enumerate(self.system.state.windows):
+        idx = 0
+        for w in self.system.state.windows:
+            # Skip Minerva's own windows (main, transcriber, popups)
+            if w.app == "minerva":
+                continue
             label = f"{w.title} ({w.app})" if w.app else w.title
             if w.id == self.system.state.foreground_id:
                 label += " *"
@@ -147,7 +151,8 @@ class SwitchWindow(InlineTool):
             })
             icon = self.system.get_window_icon(w.id)
             if icon:
-                icons[i] = icon
+                icons[idx] = icon
+            idx += 1
 
         return await self.handle.execute_tool(
             "show_choices", options=options, prompt="Switch to:",

@@ -85,6 +85,15 @@ llm:
       - openai/gpt-oss-120b
       - openai/gpt-oss-20b
 
+  inception:
+    name: Inception
+    env_key: INCEPTION_API_KEY
+    service: pipecat.services.openai.llm.OpenAILLMService
+    base_url: https://api.inceptionlabs.ai/v1
+    models:
+      - mercury-coder-small
+      - mercury-2
+
 tts:
   cartesia:
     name: Cartesia

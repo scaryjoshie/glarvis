@@ -62,3 +62,7 @@ class ToolHandle:
 
     async def execute_tool(self, tool_name: str, **kwargs) -> TaskResult:
         return await self._orch.execute_tool(tool_name, kwargs)
+
+    async def pick_directory(self, title: str = "Select directory") -> str | None:
+        """Open a native directory picker dialog. Returns the chosen path or None."""
+        return await self._orch.pick_directory(title)

@@ -285,8 +285,6 @@ class TranscriberSession(SessionTool):
             self._focus_target()
             time.sleep(0.15)  # let the window come to foreground
 
-        if getattr(self, '_submit_mode', False):
-            text += "\n"
         success = paste_text(text)
         if success:
             self._buffer.clear()
@@ -371,7 +369,17 @@ class TranscriberSession(SessionTool):
         service_class = provider_config.get("service", "")
         prompt = f"Edit the following transcript according to the instruction. Return ONLY the edited text, nothing else.\n\nInstruction: {instruction}\n\nTranscript:\n{text}"
 
-        # Use Anthropic SDK for Anthropic provider, OpenAI SDK for others
+        # Known base URLs for OpenAI-compatible providers without base_url in config
+        _PROVIDER_URLS = {
+            "cerebras": "https://api.cerebras.ai/v1",
+            "groq": "https://api.groq.com/openai/v1",
+            "deepseek": "https://api.deepseek.com/v1",
+            "together": "https://api.together.xyz/v1",
+            "grok": "https://api.x.ai/v1",
+            "inception": "https://api.inceptionlabs.ai/v1",
+        }
+
+        # Use Anthropic SDK for Anthropic provider, Google SDK for Gemini
         if "anthropic" in service_class.lower() or ts.provider == "anthropic":
             import anthropic
             kwargs = {"api_key": api_key}
@@ -387,12 +395,25 @@ class TranscriberSession(SessionTool):
                 timeout=30,
             )
             return response.content[0].text.strip()
+        elif "google" in service_class.lower() or ts.provider == "gemini":
+            import google.genai as genai
+            client = genai.Client(api_key=api_key)
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    lambda: client.models.generate_content(
+                        model=ts.model, contents=prompt,
+                    )
+                ),
+                timeout=30,
+            )
+            return response.text.strip()
         else:
-            # OpenAI-compatible (OpenAI, OpenRouter, etc.)
+            # OpenAI-compatible (OpenAI, OpenRouter, Cerebras, Groq, etc.)
             from openai import AsyncOpenAI
+            resolved_url = base_url or _PROVIDER_URLS.get(ts.provider)
             kwargs = {"api_key": api_key}
-            if base_url:
-                kwargs["base_url"] = base_url
+            if resolved_url:
+                kwargs["base_url"] = resolved_url
             client = AsyncOpenAI(**kwargs)
             response = await asyncio.wait_for(
                 client.chat.completions.create(
@@ -413,12 +434,24 @@ class TranscriberSession(SessionTool):
         return await self._do_edit(instruction)
 
     async def _do_submit(self) -> TaskResult:
-        """Send text + newline to the target window."""
-        # Append newline to buffer before sending so paste includes Enter
-        self._submit_mode = True
+        """Send text then press Enter in the target window."""
         result = await self._do_send()
-        self._submit_mode = False
         if result.guide == "Sent.":
+            import time
+            import ctypes
+            time.sleep(0.2)
+            # Try SendInput first (works for most apps)
+            from glarvis.system.windows import send_key
+            send_key(0x0D)  # VK_RETURN
+            time.sleep(0.05)
+            # Also try PostMessage to the foreground window (works for console apps)
+            try:
+                import win32gui, win32con
+                hwnd = win32gui.GetForegroundWindow()
+                win32gui.PostMessage(hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+                win32gui.PostMessage(hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+            except Exception:
+                pass
             return TaskResult(result="Text submitted.", guide="Submitted.")
         return result
 

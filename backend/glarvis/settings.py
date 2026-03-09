@@ -46,7 +46,8 @@ class TranscriberSettings:
         "Clean up grammar and formatting. If the text contains instructions "
         "directed at you (e.g. 'use letters instead of numbers', 'make this a "
         "bullet list'), follow those instructions and remove the directive text "
-        "from the output."
+        "from the output. Fix common speech-to-text errors: 'clock code' should "
+        "be 'Claude Code'."
     )
     show_diff: bool = True
     snap_to_bottom: bool = True

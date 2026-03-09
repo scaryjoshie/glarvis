@@ -2,34 +2,34 @@
 
 Auto-activates when Windows Terminal gains focus. Provides:
 - Tab switching via left/right voice intercepts (Ctrl+Shift+Tab / Ctrl+Tab)
-- Directory bookmarks (named paths, navigable via multi-choice popup)
-- "bookmark" to save current directory, "bookmarks" to navigate
+- Directory bookmarks with native file picker for creation
+- "bookmark" opens file picker to save a new bookmark
+- "bookmarks" shows multi-choice popup to navigate
 """
 
 from __future__ import annotations
 
 import asyncio
-import re
 
 from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 
-from glarvis.tool import AppSessionTool, Intercept, Keyword, TaskResult
+from glarvis.tool import AppSessionTool, Function, Intercept, Keyword, TaskResult
 
 
 # Virtual key codes
 VK_CONTROL = 0x11
 VK_SHIFT = 0x10
 VK_TAB = 0x09
-VK_RETURN = 0x0D
+VK_0 = 0x30  # VK_1 = 0x31, VK_2 = 0x32, etc.
 
-# Patterns for extracting current directory from terminal window titles
-# MINGW64:/c/Users/... | MSYS:/c/... | usr/bin/bash - /c/Users/...
-_MINGW_PATH = re.compile(r"MINGW\d*:(/\S+)|MSYS:(/\S+)")
-# C:\Users\... anywhere in the title
-_WIN_PATH = re.compile(r"([A-Z]:\\[^\s*]+)")
-# /c/Users/... style (git bash without MINGW prefix, e.g. in tab title)
-_UNIX_PATH = re.compile(r"(/[a-z]/\S+)")
+# Number words for intercepts
+_NUMBER_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6,
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5, "sixth": 6,
+    "yes": 1, "no": 2,
+}
 
 
 class TerminalSession(AppSessionTool):
@@ -58,46 +58,6 @@ class TerminalSession(AppSessionTool):
         settings.terminal.bookmarks = dict(self._bookmarks)
         save_settings(settings)
 
-    # ── Current directory detection ───────────────────────────────────────
-
-    def _get_current_directory(self) -> str | None:
-        """Try to extract the current directory from the terminal's window title."""
-        if not self.system:
-            return None
-        fg_id = self.system.state.foreground_id
-        if fg_id is None:
-            return None
-        win = next((w for w in self.system.state.windows if w.id == fg_id), None)
-        if not win or win.app != self.app_name:
-            return None
-
-        title = win.title
-
-        # Try MINGW/MSYS style: MINGW64:/c/Users/...
-        m = _MINGW_PATH.search(title)
-        if m:
-            path = m.group(1) or m.group(2)
-            return self._unix_to_win_path(path)
-
-        # Try Windows style: C:\Users\...
-        m = _WIN_PATH.search(title)
-        if m:
-            return m.group(1).rstrip("*").strip()
-
-        # Try bare unix style: /c/Users/...
-        m = _UNIX_PATH.search(title)
-        if m:
-            return self._unix_to_win_path(m.group(1))
-
-        return None
-
-    @staticmethod
-    def _unix_to_win_path(path: str) -> str:
-        """Convert /c/Users/... to C:/Users/..."""
-        if len(path) >= 3 and path[0] == "/" and path[2] == "/":
-            return path[1].upper() + ":" + path[2:]
-        return path
-
     # ── Context intercepts (active only when terminal focused) ────────────
 
     def get_context_intercepts(self) -> list[Intercept]:
@@ -106,13 +66,16 @@ class TerminalSession(AppSessionTool):
             Keyword("right", self._tab_right),
             Keyword("previous tab", self._tab_left),
             Keyword("next tab", self._tab_right),
-            Keyword("bookmark", self._bookmark_current),
-            Keyword("bookmark this", self._bookmark_current),
-            Keyword("save bookmark", self._bookmark_current),
+            Keyword("bookmark", self._bookmark_via_picker),
+            Keyword("bookmark this", self._bookmark_via_picker),
+            Keyword("save bookmark", self._bookmark_via_picker),
             Keyword("bookmarks", self._show_bookmarks),
             Keyword("open bookmark", self._show_bookmarks),
             Keyword("open bookmarks", self._show_bookmarks),
             Keyword("go to", self._show_bookmarks),
+            Keyword("cli", self._start_cli),
+            Keyword("start cli", self._start_cli),
+            Function(self._match_number),
         ]
 
     async def _tab_left(self) -> TaskResult:
@@ -127,32 +90,42 @@ class TerminalSession(AppSessionTool):
         logger.info("[Terminal] Tab right")
         return TaskResult(result="Switched to next tab.")
 
-    async def _bookmark_current(self) -> TaskResult:
-        """Save the current terminal directory as a bookmark."""
-        path = self._get_current_directory()
+    async def _match_number(self, text: str) -> TaskResult | None:
+        """Match number words (one-six, yes/no) and send the corresponding key."""
+        n = _NUMBER_WORDS.get(text)
+        if n is None:
+            return None
+        from glarvis.system.windows import send_key
+        send_key(VK_0 + n)
+        logger.info(f"[Terminal] Number shortcut: {text} → {n}")
+        return TaskResult(result=f"Pressed {n}.", guide=f"{n}.")
+
+    async def _start_cli(self) -> TaskResult:
+        await self._type_and_enter("claude")
+        logger.info("[Terminal] Starting Claude Code")
+        return TaskResult(result="Started Claude Code.", guide="Started.")
+
+    async def _bookmark_via_picker(self) -> TaskResult:
+        """Open a native file picker to select a directory, then save it as a bookmark."""
+        path = await self.handle.pick_directory("Select directory to bookmark")
         if not path:
-            return TaskResult(
-                result="Could not detect current directory from terminal title.",
-                guide="Can't detect the current directory.",
-            )
-        # Use the last folder name as the default bookmark name
+            return TaskResult(result="Cancelled.", guide="Cancelled.")
+
+        # Auto-name from last folder
         parts = path.replace("\\", "/").rstrip("/").split("/")
         name = parts[-1].lower() if parts else "unnamed"
 
-        # Avoid duplicates by name
         if name in self._bookmarks and self._bookmarks[name] == path:
             return TaskResult(result=f"Bookmark '{name}' already exists.", guide=f"{name} is already bookmarked.")
 
         self._bookmarks[name] = path
         self._save_bookmarks()
-        logger.info(f"[Terminal] Bookmarked current: {name} → {path}")
+        logger.info(f"[Terminal] Bookmarked: {name} → {path}")
         return TaskResult(result=f"Bookmarked '{name}' → {path}", guide=f"Bookmarked as {name}.")
 
     async def _show_bookmarks(self) -> TaskResult:
-        """Show a multi-choice popup with all bookmarks."""
+        """Show a multi-choice popup with all bookmarks + create option."""
         self._load_bookmarks()
-        if not self._bookmarks:
-            return TaskResult(result="No bookmarks saved.", guide="No bookmarks yet.")
 
         options = []
         for name, path in self._bookmarks.items():
@@ -160,6 +133,12 @@ class TerminalSession(AppSessionTool):
                 "text": f"{name}  —  {path}",
                 "action": {"tool": "terminal_go_to", "args": {"name": name}},
             })
+
+        # Always show "New bookmark" as the last option
+        options.append({
+            "text": "+ New bookmark...",
+            "action": {"tool": "terminal_new_bookmark"},
+        })
 
         await self.handle.execute_tool("show_choices", options=options, prompt="Bookmarks")
         return TaskResult(result="Bookmark selection shown.")
@@ -175,13 +154,10 @@ class TerminalSession(AppSessionTool):
                 required=["name"],
             ),
             FunctionSchema(
-                name="terminal_bookmark",
-                description="Save a directory bookmark. If no path given, bookmarks the current directory.",
-                properties={
-                    "name": {"type": "string", "description": "Bookmark name"},
-                    "path": {"type": "string", "description": "Directory path (optional, defaults to current directory)"},
-                },
-                required=["name"],
+                name="terminal_new_bookmark",
+                description="Open a file picker to create a new directory bookmark.",
+                properties={},
+                required=[],
             ),
             FunctionSchema(
                 name="terminal_remove_bookmark",
@@ -206,16 +182,8 @@ class TerminalSession(AppSessionTool):
     async def handle_context_call(self, tool_name: str, **kwargs) -> TaskResult:
         if tool_name == "terminal_go_to":
             return await self._go_to(kwargs.get("name", ""))
-        elif tool_name == "terminal_bookmark":
-            name = kwargs.get("name", "")
-            path = kwargs.get("path", "")
-            if not path:
-                # No path given — bookmark current directory
-                detected = self._get_current_directory()
-                if not detected:
-                    return TaskResult(result="No path given and couldn't detect current directory.")
-                path = detected
-            return self._add_bookmark(name, path)
+        elif tool_name == "terminal_new_bookmark":
+            return await self._bookmark_via_picker()
         elif tool_name == "terminal_remove_bookmark":
             return self._remove_bookmark(kwargs.get("name", ""))
         elif tool_name == "terminal_list_bookmarks":
@@ -225,24 +193,13 @@ class TerminalSession(AppSessionTool):
         return TaskResult(result=None, guide=f"Unknown context tool: {tool_name}")
 
     async def _go_to(self, name: str) -> TaskResult:
-        self._load_bookmarks()  # refresh in case edited externally
+        self._load_bookmarks()
         path = self._bookmarks.get(name.lower().strip())
         if not path:
-            # No exact match — show the multi-choice popup instead
             return await self._show_bookmarks()
         await self._type_and_enter(f'cd "{path}"')
         logger.info(f"[Terminal] go_to: {name} → {path}")
         return TaskResult(result=f"Navigated to {path}", guide=f"Navigated to {name}.")
-
-    def _add_bookmark(self, name: str, path: str) -> TaskResult:
-        name = name.lower().strip()
-        path = path.strip()
-        if not name or not path:
-            return TaskResult(result="Name and path required.")
-        self._bookmarks[name] = path
-        self._save_bookmarks()
-        logger.info(f"[Terminal] Bookmark saved: {name} → {path}")
-        return TaskResult(result=f"Bookmark '{name}' saved.", guide=f"Saved {name}.")
 
     def _remove_bookmark(self, name: str) -> TaskResult:
         name = name.lower().strip()
@@ -261,7 +218,6 @@ class TerminalSession(AppSessionTool):
         return TaskResult(result=f"Ran: {command}")
 
     async def _type_and_enter(self, text: str):
-        """Type text into the terminal via clipboard paste with trailing newline."""
         from glarvis.system.windows import paste_text
         paste_text(text + "\n")
 
@@ -270,11 +226,11 @@ class TerminalSession(AppSessionTool):
     def get_context_info(self) -> str | None:
         self._load_bookmarks()
         bookmark_list = ", ".join(self._bookmarks.keys()) if self._bookmarks else "none"
-        cwd = self._get_current_directory() or "unknown"
         return (
-            f"Terminal is focused (cwd: {cwd}). "
+            f"Terminal is focused. "
             f"Voice commands: 'left'/'right' (switch tabs), "
-            f"'bookmark' (save current dir), 'bookmarks' (navigate). "
+            f"'bookmark' (save new via file picker), 'bookmarks' (navigate), "
+            f"'cli' (start Claude Code). "
             f"Saved bookmarks: {bookmark_list}."
         )
 

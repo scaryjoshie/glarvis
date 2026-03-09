@@ -49,7 +49,10 @@ def _save_config(config: dict):
 
 
 def reload_config():
-    """Force reload config from disk."""
+    """Force reload config from disk and re-read .env for API keys."""
+    from dotenv import load_dotenv
+    from pathlib import Path
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent.parent.parent / ".env", override=True)
     global _config
     _config = None
     _load_config()

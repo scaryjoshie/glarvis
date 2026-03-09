@@ -213,6 +213,12 @@ async def _handle_ws_message(msg: dict):
     elif msg_type == "deafen":
         if session and session.tts_gate:
             await session.tts_gate.set_deafened(msg.get("deafened", False))
+    elif msg_type == "directory_picked":
+        if session and session.orchestrator:
+            path = msg.get("path", "")
+            request_id = msg.get("request_id")
+            if path and request_id:
+                await session.orchestrator.handle_directory_picked(request_id, path)
     elif msg_type == "popup_action":
         if session and session.orchestrator:
             await session.orchestrator.handle_popup_action(

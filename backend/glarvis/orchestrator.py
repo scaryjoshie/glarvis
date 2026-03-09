@@ -512,6 +512,33 @@ class Orchestrator:
                     logger.info(f"[Orchestrator] Focus → entered app context: {state.tool.name}")
                 return
 
+    # ── Directory picker ──────────────────────────────────────────────────────
+
+    _directory_pick_futures: dict[str, asyncio.Future] = {}
+
+    async def pick_directory(self, title: str = "Select directory") -> str | None:
+        """Request a directory picker from the frontend. Returns the chosen path or None."""
+        request_id = f"dirpick_{id(asyncio.current_task())}"
+        future: asyncio.Future[str | None] = asyncio.get_event_loop().create_future()
+        self._directory_pick_futures[request_id] = future
+        await self._broadcast_msg({
+            "type": "pick_directory",
+            "title": title,
+            "request_id": request_id,
+        })
+        try:
+            return await asyncio.wait_for(future, timeout=60)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            self._directory_pick_futures.pop(request_id, None)
+
+    async def handle_directory_picked(self, request_id: str, path: str):
+        """Called when the frontend returns a picked directory."""
+        future = self._directory_pick_futures.get(request_id)
+        if future and not future.done():
+            future.set_result(path)
+
     # ── Auto-spawn ────────────────────────────────────────────────────────────
 
     async def auto_spawn_app_sessions(self):
