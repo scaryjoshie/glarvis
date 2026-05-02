@@ -92,3 +92,28 @@ cp backend/services.example.yaml backend/services.yaml
 ```
 
 Backend on `:8000`, Tauri dev shell alongside. Vite proxies `/webrtc`, `/api`, `/ws`.
+
+## Built with
+
+Backend
+- [Pipecat](https://github.com/pipecat-ai/pipecat) — voice/AI frame pipeline
+- [FastAPI](https://fastapi.tiangolo.com/) + [uvicorn](https://www.uvicorn.org/) — server and WebSocket
+- [aiortc](https://github.com/aiortc/aiortc) — WebRTC transport
+- [Silero VAD](https://github.com/snakers4/silero-vad) — voice activity detection
+- [pywin32](https://github.com/mhammond/pywin32) — window enumeration, clipboard, `SendInput`
+- [Pillow](https://python-pillow.org/) — HICON → PNG conversion
+- [loguru](https://github.com/Delgan/loguru), [PyYAML](https://pyyaml.org/), [python-dotenv](https://github.com/theskumar/python-dotenv)
+- [uv](https://github.com/astral-sh/uv) — Python package manager / lockfile
+- SDKs: [anthropic](https://github.com/anthropics/anthropic-sdk-python), [openai](https://github.com/openai/openai-python), [google-genai](https://github.com/googleapis/python-genai)
+
+Frontend
+- [Svelte 5](https://svelte.dev/) + [Vite](https://vitejs.dev/)
+- [Tauri 2](https://tauri.app/) — desktop shell, native popup windows
+- [@tauri-apps/plugin-dialog](https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/dialog) — native directory picker
+- [marked](https://marked.js.org/) + [DOMPurify](https://github.com/cure53/DOMPurify) — board markdown
+- [diff](https://github.com/kpdecker/jsdiff) — transcriber edit view
+
+Model / service providers
+- LLM: [Anthropic](https://www.anthropic.com/), [OpenAI](https://platform.openai.com/), [OpenRouter](https://openrouter.ai/), [Google Gemini](https://ai.google.dev/), [Cerebras](https://www.cerebras.ai/), [xAI Grok](https://x.ai/), [DeepSeek](https://www.deepseek.com/), [Together](https://www.together.ai/), [Groq](https://groq.com/), [Inception](https://www.inceptionlabs.ai/)
+- TTS: [Cartesia](https://cartesia.ai/), [ElevenLabs](https://elevenlabs.io/), [Deepgram](https://deepgram.com/), [OpenAI](https://platform.openai.com/docs/guides/text-to-speech), [Inworld](https://inworld.ai/)
+- STT: [Deepgram](https://deepgram.com/), [OpenAI](https://platform.openai.com/docs/guides/speech-to-text), [Groq](https://groq.com/), [Speechmatics](https://www.speechmatics.com/)
