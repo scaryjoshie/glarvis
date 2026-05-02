@@ -1,6 +1,6 @@
-# Minerva
+# Glarvis/Minerva
 
-Desktop voice assistant. Speak or type; it sees your windows, clipboard, and focus, and can switch tabs, paste text, launch programs, and run sessions in your terminal.
+Desktop voice assistant. Sees your windows, clipboard, and focus, and can switch tabs, paste text, launch programs, and run sessions in your terminal.
 
 ## What you can do
 
